@@ -64,6 +64,15 @@
   
   /* Touch targets */
   --touch-min: 44px;
+
+  /* Chart palette - validated for CVD separation & contrast (light surface).
+     P/C/IF/OF are the same identities the lineup grid teaches. */
+  --chart-p: #C62828;
+  --chart-c: #1565C0;
+  --chart-if: #2E7D32;
+  --chart-of: #E65100;
+  --chart-sit: #AEAEB2;   /* deliberate neutral: bench = "nothing" */
+  --chart-accent: #007AFF;
 }
 
 /* Dark theme */
@@ -89,6 +98,12 @@
   --pos-infield: #253A28;
   --pos-outfield: #3A3525;
   --pos-sit: #2C2C2E;
+
+  /* Chart palette re-validated against the dark surface;
+     only the catcher blue needed a lighter step */
+  --chart-c: #1976D2;
+  --chart-sit: #636366;
+  --chart-accent: #409CFF;
 }
 
 /* --------------------------------------------
@@ -1270,6 +1285,195 @@ body {
   display: flex;
   gap: var(--space-md);
   justify-content: center;
+}
+
+/* --------------------------------------------
+   Season Stats Charts
+   Mark specs: bars <= 24px thick, 4px rounded data-end,
+   2px surface gaps between fills, text wears text tokens.
+   -------------------------------------------- */
+.chart-area {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.hbar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.hbar-label {
+  width: 84px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+.hbar-track {
+  flex: 1;
+  display: flex;
+  gap: 2px; /* the surface gap separates touching segments */
+  height: 16px;
+  align-items: stretch;
+}
+
+.hbar-seg {
+  min-width: 3px;
+  cursor: pointer;
+}
+
+/* square at the baseline (left), 4px rounded at the data end */
+.hbar-track .hbar-seg:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+.hbar-seg.single {
+  background: var(--chart-accent);
+  border-radius: 0 4px 4px 0;
+}
+
+.hbar-value {
+  width: 28px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border-light);
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 50;
+  transform: translateY(-110%);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-sm) var(--space-md);
+  font-size: 12px;
+  color: var(--text-secondary);
+  pointer-events: none;
+  min-width: 130px;
+}
+
+.chart-tooltip-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+/* Pitcher workload: per-game columns */
+.workload-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-lg);
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.workload-row:last-child {
+  border-bottom: none;
+}
+
+.workload-info {
+  width: 168px;
+  flex-shrink: 0;
+}
+
+.workload-name {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.workload-plot {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  border-bottom: 1px solid var(--border-light); /* recessive hairline baseline */
+}
+
+.workload-col {
+  width: 14px;
+  max-width: 24px;
+  background: var(--chart-accent);
+  border-radius: 4px 4px 0 0; /* rounded data-end, square at baseline */
+  cursor: pointer;
+}
+
+.workload-maxline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--danger);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Table-view twins */
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.stats-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: var(--space-sm);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.stats-table td {
+  padding: var(--space-sm);
+  border-bottom: 1px solid var(--border-light);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+@media (max-width: 640px) {
+  .hbar-label {
+    width: 64px;
+    font-size: 12px;
+  }
+
+  .workload-info {
+    width: 120px;
+  }
 }
 
 /* --------------------------------------------

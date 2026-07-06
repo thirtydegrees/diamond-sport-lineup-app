@@ -9,6 +9,7 @@ import { SettingsView } from './views/SettingsView';
 import { GameSetupView } from './views/GameSetupView';
 import { LineupView } from './views/LineupView';
 import { PitchersView } from './views/PitchersView';
+import { StatsView } from './views/StatsView';
 import { HistoryView } from './views/HistoryView';
 
 // ============================================
@@ -20,6 +21,7 @@ function Navigation({ currentView, onViewChange }) {
   const tabs = [
     { id: 'roster', label: 'Roster', icon: '👥' },
     { id: 'game', label: 'Game', icon: '📋' },
+    { id: 'stats', label: 'Stats', icon: '📊' },
     { id: 'pitchers', label: 'Pitchers', icon: sportEmoji },
     { id: 'history', label: 'History', icon: '🗓️' },
     { id: 'settings', label: 'Settings', icon: '⚙️' }
@@ -129,6 +131,8 @@ function AppContent() {
         {view === 'game' && showLineup && (
           <LineupView onBack={handleBackToSetup} />
         )}
+
+        {view === 'stats' && <StatsView />}
 
         {view === 'pitchers' && <PitchersView />}
 

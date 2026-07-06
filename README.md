@@ -84,6 +84,8 @@ the *previous day* in US timezones.
 - [x] **Phase 3** – Mobile UX overhaul (bottom tab bar, touch drag-to-reorder,
       sticky lineup columns, bottom-sheet modals, PWA install/offline) +
       print polish
-- [ ] **Phase 4** – Season analytics: position distribution, pitcher workload,
-      playing-time equity
+- [x] **Phase 4** – Season analytics (Stats tab): position distribution,
+      bench-time equity, pitcher workload with per-outing history and a
+      season/30-day/7-day filter; every chart has a table view and the
+      palette is CVD-validated in both themes
 - [ ] **Phase 5** – Hosted beta on Vercel; payments later

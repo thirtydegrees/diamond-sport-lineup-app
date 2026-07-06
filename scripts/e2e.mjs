@@ -101,6 +101,75 @@ await page.waitForSelector('text=Test Tigers');
 const historyText = await page.textContent('.player-item');
 historyText.includes('7/6/2026') ? ok('history shows correct date 7/6/2026') : fail(`history row: "${historyText}"`);
 
+// ============================================
+// Phase 4: pitch counter + season stats
+// ============================================
+await page.click('.nav-tab:has-text("Game")');
+await page.waitForSelector('text=Continue Current Game');
+await page.click('text=Continue Current Game');
+await page.waitForSelector('.lineup-grid');
+
+// Open the inning-1 pitcher's cell and count 5 pitches
+await page.locator('.lineup-grid .pos-text.P').first().click();
+await page.waitForSelector('text=Pitch Counter');
+await page.click('text=Pitch Counter');
+await page.waitForSelector('.pitch-counter');
+for (let i = 0; i < 5; i++) await page.click('.pitch-btn-plus');
+const counted = (await page.textContent('.pitch-counter-display')).trim();
+counted === '5' ? ok('pitch counter counts to 5') : fail(`pitch counter shows ${counted}`);
+await page.click('text=End Inning');
+
+// Stats tab
+await page.click('.nav-tab:has-text("Stats")');
+await page.waitForSelector('text=Playing Time by Position');
+
+const kpiPitches = (await page.locator('.stat-card:has(.stat-label:text-is("Pitches")) .stat-value').textContent()).trim();
+kpiPitches === '5' ? ok('KPI shows 5 pitches logged') : fail(`Pitches KPI: ${kpiPitches}`);
+
+const segCount = await page.locator('.hbar-seg').count();
+segCount >= 12 ? ok(`position distribution renders (${segCount} segments)`) : fail(`only ${segCount} segments`);
+
+const legendCount = await page.locator('.legend-item').count();
+legendCount === 5 ? ok('legend lists all 5 position groups') : fail(`${legendCount} legend items`);
+
+await page.locator('text=Bench Time').waitFor();
+ok('bench time chart present');
+
+const workloadCols = await page.locator('.workload-col').count();
+workloadCols >= 1 ? ok('pitcher workload columns render') : fail('no workload columns');
+
+// Tooltip on hover
+await page.locator('.hbar-seg').first().hover();
+await page.waitForSelector('.chart-tooltip');
+ok('chart tooltip appears on hover');
+
+// Table-view twin
+await page.locator('.card:has-text("Playing Time")').locator('button:has-text("Table")').click();
+await page.waitForSelector('.stats-table');
+const tableRows = await page.locator('.card:has-text("Playing Time") .stats-table tbody tr').count();
+tableRows === 12 ? ok('table view lists all 12 players') : fail(`table rows: ${tableRows}`);
+await page.locator('.card:has-text("Playing Time")').locator('button:has-text("Chart")').click();
+
+// Range filter scopes the cards
+await page.click('button:has-text("Last 7 Days")');
+await page.waitForTimeout(200);
+const kpiGames7 = (await page.locator('.stat-card:has(.stat-label:text-is("Games")) .stat-value').textContent()).trim();
+kpiGames7 === '1' ? ok('7-day filter keeps today\'s game in scope') : fail(`Games KPI at 7d: ${kpiGames7}`);
+await page.click('button:has-text("Full Season")');
+
+await page.screenshot({ path: (process.env.SCRATCH || '.e2e-artifacts') + '/stats-light.png', fullPage: true });
+
+// Dark theme render
+await page.click('.nav-tab:has-text("Settings")');
+await page.waitForSelector('text=Dark Mode');
+await page.locator('.card:has-text("Display") .toggle-track').click();
+await page.click('.nav-tab:has-text("Stats")');
+await page.waitForSelector('text=Playing Time by Position');
+await page.screenshot({ path: (process.env.SCRATCH || '.e2e-artifacts') + '/stats-dark.png', fullPage: true });
+await page.click('.nav-tab:has-text("Settings")');
+await page.locator('.card:has-text("Display") .toggle-track').click(); // back to light
+ok('stats view renders in dark mode');
+
 // 10. Persistence across reload
 await page.reload();
 await page.waitForSelector('.nav-title');
@@ -111,7 +180,7 @@ persisted === 12 ? ok('roster persisted across reload') : fail(`after reload ros
 // ============================================
 // Phase 1: softball 10-fielder flow
 // ============================================
-await page.click('.nav-tab:has-text("⚙️")');
+await page.click('.nav-tab:has-text("Settings")');
 await page.waitForSelector('text=Sport & Field');
 
 const sportCard = page.locator('.card', { hasText: 'Sport & Field' });

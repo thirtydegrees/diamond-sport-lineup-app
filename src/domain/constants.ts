@@ -4,6 +4,7 @@
 
 import type { FielderCount, Game, Player, Position, PositionTier, Settings } from './types';
 import { todayISO } from './dates';
+import { newId } from './ids';
 
 export const POSITIONS: Position[] = ['P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF'];
 
@@ -133,7 +134,7 @@ export function createBlankPlayer(): Player {
   });
 
   return {
-    id: Date.now().toString(),
+    id: newId(),
     name: '',
     canPitch: false,
     prefersPitching: false,
@@ -145,7 +146,7 @@ export function createBlankPlayer(): Player {
 
 export function createBlankGame(settings?: Settings): Game {
   return {
-    id: Date.now().toString(),
+    id: newId(),
     date: todayISO(),
     opponent: '',
     innings: settings?.innings || DEFAULT_SETTINGS.innings,

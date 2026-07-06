@@ -12,6 +12,7 @@
 import React from 'react';
 import { getFieldingPositions } from '../domain/constants';
 import { formatDateLong } from '../domain/dates';
+import { newId } from '../domain/ids';
 import { Solver } from '../domain/solver';
 import { AppContext } from '../state/AppContext';
 import { Storage } from '../services/storage';
@@ -361,7 +362,7 @@ export function LineupView({ onBack }) {
       ));
     } else {
       setPitchHistory([...pitchHistory, {
-        id: Date.now().toString(),
+        id: newId(),
         playerId: player.id,
         gameId: game.id,
         date: game.date,

@@ -4,6 +4,7 @@
 
 import React from 'react';
 import { todayISO } from '../domain/dates';
+import { newId } from '../domain/ids';
 import { AppContext } from '../state/AppContext';
 import { Storage } from '../services/storage';
 import { GameStartOptionsModal } from '../components/modals';
@@ -169,7 +170,7 @@ export function GameSetupView({ onStartGame }) {
   // Continue to lineup
   const handleContinue = () => {
     const gameData = {
-      id: game?.id || Date.now().toString(),
+      id: game?.id || newId(),
       date: gameDate,
       opponent,
       innings: gameInnings,

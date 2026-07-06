@@ -4,6 +4,7 @@
 
 import React from 'react';
 import { POSITIONS, POSITION_LABELS, POSITION_TIERS } from '../domain/constants';
+import { newId } from '../domain/ids';
 import { Solver } from '../domain/solver';
 import { Storage } from '../services/storage';
 import { Alert, Checkbox, EmptyState, Modal, OptionItem, OptionList, PositionBadge } from './ui';
@@ -86,7 +87,7 @@ export function PlayerEditorModal({ player, positions = POSITIONS, onSave, onClo
     if (!name.trim()) return;
 
     onSave({
-      id: player?.id || Date.now().toString(),
+      id: player?.id || newId(),
       name: name.trim(),
       canPitch,
       prefersPitching: canPitch && prefersPitching,

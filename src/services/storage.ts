@@ -10,6 +10,7 @@
 
 import { DEFAULT_SETTINGS } from '../domain/constants';
 import { compareDatesDesc, daysBetween } from '../domain/dates';
+import { newId } from '../domain/ids';
 import type { Game, PitchRecord, PitcherEligibility, Player, Settings } from '../domain/types';
 
 const STORAGE_PREFIX = 'ybl_';
@@ -195,11 +196,12 @@ export const Storage = {
       r => r.playerId === record.playerId && r.gameId === record.gameId
     );
     if (existingIndex >= 0) {
-      history[existingIndex] = { ...history[existingIndex], ...record };
+      // Keep the existing id - `record.id` may be absent
+      history[existingIndex] = { ...history[existingIndex], ...record, id: history[existingIndex].id };
     } else {
       history.push({
-        id: Date.now().toString(),
-        ...record
+        ...record,
+        id: record.id ?? newId()
       });
     }
     return this.savePitchHistory(history);
