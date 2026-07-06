@@ -18,11 +18,11 @@ function Navigation({ currentView, onViewChange }) {
   const { settings } = React.useContext(AppContext);
   const sportEmoji = settings.sport === 'softball' ? '🥎' : '⚾';
   const tabs = [
-    { id: 'roster', label: 'Roster' },
-    { id: 'game', label: 'Game' },
-    { id: 'pitchers', label: 'Pitchers' },
-    { id: 'history', label: 'History' },
-    { id: 'settings', label: '⚙️' }
+    { id: 'roster', label: 'Roster', icon: '👥' },
+    { id: 'game', label: 'Game', icon: '📋' },
+    { id: 'pitchers', label: 'Pitchers', icon: sportEmoji },
+    { id: 'history', label: 'History', icon: '🗓️' },
+    { id: 'settings', label: 'Settings', icon: '⚙️' }
   ];
 
   return (
@@ -36,7 +36,8 @@ function Navigation({ currentView, onViewChange }) {
               className={`nav-tab ${currentView === tab.id ? 'active' : ''}`}
               onClick={() => onViewChange(tab.id)}
             >
-              {tab.label}
+              <span className="nav-tab-icon" aria-hidden="true">{tab.icon}</span>
+              <span className="nav-tab-label">{tab.label}</span>
             </button>
           ))}
         </div>

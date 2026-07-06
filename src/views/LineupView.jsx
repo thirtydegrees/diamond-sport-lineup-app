@@ -515,6 +515,7 @@ export function LineupView({ onBack }) {
           <LineupGrid
             game={game}
             roster={roster}
+            currentInning={currentInning}
             onCellClick={handleCellClick}
             onScoreChange={handleScoreChange}
           />

@@ -9,6 +9,7 @@ import { StatCard } from './ui';
 export function LineupGrid({
   game,
   roster,
+  currentInning,
   onCellClick,
   onScoreChange
 }) {
@@ -61,24 +62,26 @@ export function LineupGrid({
               style={{ position: 'relative' }}
             >
               {isEditing ? (
-                <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
+                <div className="score-edit">
                   <button
+                    className="score-step-btn"
                     onClick={(e) => { e.stopPropagation(); onScoreChange(team, inning, Math.max(0, (value || 0) - 1)); }}
-                    style={{ width: '20px', height: '24px', border: 'none', background: 'var(--bg-secondary)', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+                    aria-label="Minus one run"
                   >−</button>
-                  <span style={{ minWidth: '20px', textAlign: 'center' }}>{value || 0}</span>
+                  <span className="score-edit-value">{value || 0}</span>
                   <button
+                    className="score-step-btn"
                     onClick={(e) => { e.stopPropagation(); onScoreChange(team, inning, (value || 0) + 1); }}
-                    style={{ width: '20px', height: '24px', border: 'none', background: 'var(--bg-secondary)', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
+                    aria-label="Plus one run"
                   >+</button>
                 </div>
               ) : (
-                value !== undefined ? value : ''
+                <span className="score-value">{value !== undefined ? value : ''}</span>
               )}
             </div>
           );
         })}
-        <div className="score-cell total">{total}</div>
+        <div className="score-cell total"><span className="score-value">{total}</span></div>
       </div>
     </div>
   );
@@ -96,7 +99,7 @@ export function LineupGrid({
           {/* Header Row */}
           <div className="lineup-cell header player-col">Batting</div>
           {Array.from({ length: innings }, (_, i) => (
-            <div key={i} className="lineup-cell header">
+            <div key={i} className={`lineup-cell header ${currentInning === i + 1 ? 'current' : ''}`}>
               {i + 1}
             </div>
           ))}
@@ -146,7 +149,7 @@ export function LineupGrid({
                   return (
                     <div
                       key={key}
-                      className={`lineup-cell ${isLocked ? 'locked' : ''} ${isEmpty ? 'empty-cell' : ''}`}
+                      className={`lineup-cell ${isLocked ? 'locked' : ''} ${isEmpty ? 'empty-cell' : ''} ${currentInning === inning ? 'current-col' : ''}`}
                       style={isAfterExit ? { background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' } : {}}
                       onClick={() => {
                         if (!isAfterExit) {
@@ -161,7 +164,7 @@ export function LineupGrid({
                           {position}
                         </span>
                       ) : (
-                        <span style={{ color: 'var(--text-tertiary)', fontSize: '18px' }}>+</span>
+                        <span className="empty-plus">+</span>
                       )}
                     </div>
                   );

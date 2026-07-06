@@ -7,7 +7,7 @@ import { todayISO } from '../domain/dates';
 import { AppContext } from '../state/AppContext';
 import { Storage } from '../services/storage';
 import { GameStartOptionsModal } from '../components/modals';
-import { Alert, Checkbox, DragHandle, PlayerTag } from '../components/ui';
+import { Alert, Checkbox, PlayerTag } from '../components/ui';
 
 export function GameSetupView({ onStartGame }) {
   const { roster, settings, game, setGame } = React.useContext(AppContext);
@@ -18,8 +18,9 @@ export function GameSetupView({ onStartGame }) {
   const [opponent, setOpponent] = React.useState('');
   const [gameDate, setGameDate] = React.useState(todayISO());
   const [gameInnings, setGameInnings] = React.useState(settings.innings);
-  const [draggedIdx, setDraggedIdx] = React.useState(null);
+  const [draggedId, setDraggedId] = React.useState(null);
   const [initialized, setInitialized] = React.useState(false);
+  const dragState = React.useRef(null);
 
   // Initialize from existing game or show options
   React.useEffect(() => {
@@ -103,21 +104,48 @@ export function GameSetupView({ onStartGame }) {
     }
   }, [roster, availability, initialized, battingOrder]);
 
-  // Drag handlers
-  const handleDragStart = (idx) => setDraggedIdx(idx);
+  // Drag-to-reorder via pointer events. The HTML5 drag-and-drop API never
+  // fires on iOS Safari, so this uses pointerdown/move/up on the handle,
+  // which works identically for mouse and touch.
+  const handleDragMove = React.useCallback((ev) => {
+    const st = dragState.current;
+    if (!st) return;
+    const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('[data-player-id]');
+    if (!el) return;
+    const overId = el.getAttribute('data-player-id');
+    if (!overId || overId === st.playerId) return;
+    if (el.getAttribute('data-available') !== 'true') return;
 
-  const handleDragOver = (e, idx) => {
+    setBattingOrder(prev => {
+      const from = prev.indexOf(st.playerId);
+      const to = prev.indexOf(overId);
+      if (from < 0 || to < 0 || from === to) return prev;
+      const next = [...prev];
+      next.splice(from, 1);
+      next.splice(to, 0, st.playerId);
+      return next;
+    });
+  }, []);
+
+  const handleDragEnd = React.useCallback(() => {
+    dragState.current = null;
+    setDraggedId(null);
+    window.removeEventListener('pointermove', handleDragMove);
+    window.removeEventListener('pointerup', handleDragEnd);
+    window.removeEventListener('pointercancel', handleDragEnd);
+  }, [handleDragMove]);
+
+  const handleDragStart = (e, playerId) => {
     e.preventDefault();
-    if (draggedIdx === null || draggedIdx === idx) return;
-
-    const newOrder = [...battingOrder];
-    const [removed] = newOrder.splice(draggedIdx, 1);
-    newOrder.splice(idx, 0, removed);
-    setBattingOrder(newOrder);
-    setDraggedIdx(idx);
+    dragState.current = { playerId };
+    setDraggedId(playerId);
+    window.addEventListener('pointermove', handleDragMove);
+    window.addEventListener('pointerup', handleDragEnd);
+    window.addEventListener('pointercancel', handleDragEnd);
   };
 
-  const handleDragEnd = () => setDraggedIdx(null);
+  // Clean up listeners if the view unmounts mid-drag
+  React.useEffect(() => handleDragEnd, [handleDragEnd]);
 
   // Toggle player availability
   const toggleAvailability = (playerId) => {
@@ -225,7 +253,7 @@ export function GameSetupView({ onStartGame }) {
           </div>
         </div>
         <div className="card-body no-padding">
-          {battingOrder.map((playerId, idx) => {
+          {battingOrder.map((playerId) => {
             const player = roster.find(p => p.id === playerId);
             if (!player) return null;
 
@@ -236,13 +264,19 @@ export function GameSetupView({ onStartGame }) {
             return (
               <div
                 key={playerId}
-                className={`player-item ${!isAvailable ? 'unavailable' : ''} ${draggedIdx === idx ? 'dragging' : ''}`}
-                draggable={isAvailable}
-                onDragStart={() => isAvailable && handleDragStart(idx)}
-                onDragOver={(e) => isAvailable && handleDragOver(e, idx)}
-                onDragEnd={handleDragEnd}
+                data-player-id={playerId}
+                data-available={isAvailable ? 'true' : 'false'}
+                className={`player-item ${!isAvailable ? 'unavailable' : ''} ${draggedId === playerId ? 'dragging' : ''}`}
               >
-                {isAvailable && <DragHandle />}
+                {isAvailable && (
+                  <span
+                    className="drag-handle"
+                    onPointerDown={(e) => handleDragStart(e, playerId)}
+                    aria-label="Drag to reorder"
+                  >
+                    ☰
+                  </span>
+                )}
                 <div
                   className="player-number"
                   style={{ opacity: isAvailable ? 1 : 0.4 }}
