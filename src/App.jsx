@@ -1,68 +1,15 @@
 /* ============================================
-   Youth Baseball Lineup - Main Application
+   Diamond Lineup - Main Application
    ============================================ */
 
-// ============================================
-// App Context (Global State)
-// ============================================
-const AppContext = React.createContext();
-
-function AppProvider({ children }) {
-  // Load initial state from storage
-  const [roster, setRoster] = React.useState(() => Storage.getRoster());
-  const [settings, setSettings] = React.useState(() => Storage.getSettings());
-  const [game, setGame] = React.useState(() => Storage.getCurrentGame());
-  const [games, setGames] = React.useState(() => Storage.getGames());
-  const [pitchHistory, setPitchHistory] = React.useState(() => Storage.getPitchHistory());
-
-  // Persist changes to storage
-  React.useEffect(() => {
-    Storage.saveRoster(roster);
-  }, [roster]);
-
-  React.useEffect(() => {
-    Storage.saveSettings(settings);
-  }, [settings]);
-
-  React.useEffect(() => {
-    Storage.saveCurrentGame(game);
-  }, [game]);
-
-  React.useEffect(() => {
-    Storage.saveGames(games);
-  }, [games]);
-
-  React.useEffect(() => {
-    Storage.savePitchHistory(pitchHistory);
-  }, [pitchHistory]);
-
-  // Apply dark mode
-  React.useEffect(() => {
-    document.documentElement.setAttribute(
-      'data-theme', 
-      settings.darkMode ? 'dark' : 'light'
-    );
-  }, [settings.darkMode]);
-
-  const value = {
-    roster,
-    setRoster,
-    settings,
-    setSettings,
-    game,
-    setGame,
-    games,
-    setGames,
-    pitchHistory,
-    setPitchHistory
-  };
-
-  return (
-    <AppContext.Provider value={value}>
-      {children}
-    </AppContext.Provider>
-  );
-}
+import React from 'react';
+import { AppContext, AppProvider } from './state/AppContext';
+import { RosterView } from './views/RosterView';
+import { SettingsView } from './views/SettingsView';
+import { GameSetupView } from './views/GameSetupView';
+import { LineupView } from './views/LineupView';
+import { PitchersView } from './views/PitchersView';
+import { HistoryView } from './views/HistoryView';
 
 // ============================================
 // Navigation Component
@@ -79,7 +26,7 @@ function Navigation({ currentView, onViewChange }) {
   return (
     <nav className="nav">
       <div className="nav-content">
-        <span className="nav-title">⚾ Lineup</span>
+        <span className="nav-title">⚾ Diamond Lineup</span>
         <div className="nav-tabs">
           {tabs.map(tab => (
             <button
@@ -143,14 +90,14 @@ function AppContent() {
 
   return (
     <div className="app">
-      <Navigation 
-        currentView={view} 
+      <Navigation
+        currentView={view}
         onViewChange={handleViewChange}
       />
-      
+
       <main className="main">
         {view === 'roster' && <RosterView />}
-        
+
         {view === 'game' && showGameChoice && (
           <div className="container">
             <div className="card">
@@ -171,35 +118,29 @@ function AppContent() {
             </div>
           </div>
         )}
-        
+
         {view === 'game' && !showLineup && !showGameChoice && (
           <GameSetupView onStartGame={handleStartGame} />
         )}
-        
+
         {view === 'game' && showLineup && (
           <LineupView onBack={handleBackToSetup} />
         )}
-        
+
         {view === 'pitchers' && <PitchersView />}
-        
+
         {view === 'history' && <HistoryView />}
-        
+
         {view === 'settings' && <SettingsView />}
       </main>
     </div>
   );
 }
 
-function App() {
+export function App() {
   return (
     <AppProvider>
       <AppContent />
     </AppProvider>
   );
 }
-
-// ============================================
-// Initialize Application
-// ============================================
-const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(<App />);

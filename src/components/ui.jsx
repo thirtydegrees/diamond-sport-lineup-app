@@ -1,11 +1,14 @@
 /* ============================================
-   Youth Baseball Lineup - Reusable Components
+   Diamond Lineup - Reusable Components
    ============================================ */
+
+import React from 'react';
+import { getPositionColorClass } from '../domain/constants';
 
 // ============================================
 // Modal Component
 // ============================================
-function Modal({ title, children, onClose, footer }) {
+export function Modal({ title, children, onClose, footer }) {
   // Close on escape key
   React.useEffect(() => {
     const handleEscape = (e) => {
@@ -40,7 +43,7 @@ function Modal({ title, children, onClose, footer }) {
 // ============================================
 // Toggle Switch Component
 // ============================================
-function Toggle({ checked, onChange, label, disabled = false }) {
+export function Toggle({ checked, onChange, label, disabled = false }) {
   const handleClick = () => {
     if (!disabled) {
       onChange(!checked);
@@ -49,8 +52,8 @@ function Toggle({ checked, onChange, label, disabled = false }) {
 
   return (
     <label className={`toggle ${disabled ? 'disabled' : ''}`}>
-      <div 
-        className={`toggle-track ${checked ? 'active' : ''}`} 
+      <div
+        className={`toggle-track ${checked ? 'active' : ''}`}
         onClick={handleClick}
         role="switch"
         aria-checked={checked}
@@ -72,7 +75,7 @@ function Toggle({ checked, onChange, label, disabled = false }) {
 // ============================================
 // Stepper Component (+/- buttons)
 // ============================================
-function Stepper({ value, onChange, min = 0, max = 99, size = 'normal' }) {
+export function Stepper({ value, onChange, min = 0, max = 99, size = 'normal' }) {
   const decrement = () => {
     if (value > min) {
       onChange(value - 1);
@@ -87,7 +90,7 @@ function Stepper({ value, onChange, min = 0, max = 99, size = 'normal' }) {
 
   return (
     <div className="stepper">
-      <button 
+      <button
         className={`stepper-btn ${size === 'small' ? 'sm' : ''}`}
         onClick={decrement}
         disabled={value <= min}
@@ -96,7 +99,7 @@ function Stepper({ value, onChange, min = 0, max = 99, size = 'normal' }) {
         −
       </button>
       <span className="stepper-value">{value}</span>
-      <button 
+      <button
         className={`stepper-btn ${size === 'small' ? 'sm' : ''}`}
         onClick={increment}
         disabled={value >= max}
@@ -111,7 +114,7 @@ function Stepper({ value, onChange, min = 0, max = 99, size = 'normal' }) {
 // ============================================
 // Checkbox Component
 // ============================================
-function Checkbox({ checked, onChange, label, disabled = false }) {
+export function Checkbox({ checked, onChange, label, disabled = false }) {
   return (
     <label className={`checkbox ${disabled ? 'disabled' : ''}`}>
       <input
@@ -129,13 +132,13 @@ function Checkbox({ checked, onChange, label, disabled = false }) {
 // ============================================
 // Alert Component
 // ============================================
-function Alert({ type = 'info', children, onDismiss }) {
+export function Alert({ type = 'info', children, onDismiss }) {
   return (
     <div className={`alert alert-${type}`}>
       <div style={{ flex: 1 }}>{children}</div>
       {onDismiss && (
-        <button 
-          className="btn-icon" 
+        <button
+          className="btn-icon"
           onClick={onDismiss}
           style={{ marginLeft: '8px', background: 'transparent' }}
           aria-label="Dismiss"
@@ -150,7 +153,7 @@ function Alert({ type = 'info', children, onDismiss }) {
 // ============================================
 // Empty State Component
 // ============================================
-function EmptyState({ icon, title, text, action }) {
+export function EmptyState({ icon, title, text, action }) {
   return (
     <div className="empty-state">
       {icon && <div className="empty-state-icon">{icon}</div>}
@@ -164,9 +167,9 @@ function EmptyState({ icon, title, text, action }) {
 // ============================================
 // Stat Card Component
 // ============================================
-function StatCard({ value, label }) {
+export function StatCard({ value, label, title }) {
   return (
-    <div className="stat-card">
+    <div className="stat-card" title={title}>
       <div className="stat-value">{value}</div>
       <div className="stat-label">{label}</div>
     </div>
@@ -176,13 +179,13 @@ function StatCard({ value, label }) {
 // ============================================
 // Option List Component (for action menus)
 // ============================================
-function OptionList({ children }) {
+export function OptionList({ children }) {
   return <div className="option-list">{children}</div>;
 }
 
-function OptionItem({ title, description, onClick, danger = false }) {
+export function OptionItem({ title, description, onClick, danger = false }) {
   return (
-    <div 
+    <div
       className={`option-item ${danger ? 'danger' : ''}`}
       onClick={onClick}
       role="button"
@@ -203,14 +206,14 @@ function OptionItem({ title, description, onClick, danger = false }) {
 // ============================================
 // Player Tag Component
 // ============================================
-function PlayerTag({ type, children }) {
+export function PlayerTag({ type, children }) {
   const classMap = {
     pitcher: 'tag-pitcher',
     catcher: 'tag-catcher',
     eligible: 'tag-eligible',
     ineligible: 'tag-ineligible'
   };
-  
+
   return (
     <span className={`player-tag ${classMap[type] || ''}`}>
       {children}
@@ -221,11 +224,11 @@ function PlayerTag({ type, children }) {
 // ============================================
 // Position Badge Component
 // ============================================
-function PositionBadge({ position, size = 'normal' }) {
+export function PositionBadge({ position, size = 'normal' }) {
   const colorClass = getPositionColorClass(position);
-  
+
   return (
-    <span 
+    <span
       className={`pos-text ${colorClass}`}
       style={size === 'small' ? { fontSize: '12px' } : {}}
     >
@@ -237,25 +240,25 @@ function PositionBadge({ position, size = 'normal' }) {
 // ============================================
 // Drag Handle Component
 // ============================================
-function DragHandle() {
+export function DragHandle() {
   return <span className="drag-handle">☰</span>;
 }
 
 // ============================================
 // Confirm Dialog Component
 // ============================================
-function ConfirmDialog({ title, message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', onConfirm, onCancel, danger = false }) {
+export function ConfirmDialog({ title, message, confirmLabel = 'Confirm', cancelLabel = 'Cancel', onConfirm, onCancel, danger = false }) {
   return (
-    <Modal 
-      title={title} 
+    <Modal
+      title={title}
       onClose={onCancel}
       footer={
         <>
           <button className="btn btn-secondary" onClick={onCancel}>
             {cancelLabel}
           </button>
-          <button 
-            className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`} 
+          <button
+            className={`btn ${danger ? 'btn-danger' : 'btn-primary'}`}
             onClick={onConfirm}
           >
             {confirmLabel}
@@ -266,30 +269,4 @@ function ConfirmDialog({ title, message, confirmLabel = 'Confirm', cancelLabel =
       <p>{message}</p>
     </Modal>
   );
-}
-
-// ============================================
-// Loading Spinner Component
-// ============================================
-function Spinner({ size = 24 }) {
-  return (
-    <div 
-      style={{
-        width: size,
-        height: size,
-        border: '3px solid var(--border)',
-        borderTopColor: 'var(--accent)',
-        borderRadius: '50%',
-        animation: 'spin 0.8s linear infinite'
-      }}
-    />
-  );
-}
-
-// Add keyframes for spinner (injected once)
-if (typeof document !== 'undefined' && !document.getElementById('spinner-styles')) {
-  const style = document.createElement('style');
-  style.id = 'spinner-styles';
-  style.textContent = '@keyframes spin { to { transform: rotate(360deg); } }';
-  document.head.appendChild(style);
 }
