@@ -6,9 +6,16 @@
    Sit logic: maxSitsPerGame is the TOTAL sits allowed per player
    for the entire game. If everyone has hit the max, the caller is
    asked for an override to allow additional sits.
+
+   Sport/rule configuration:
+   - fieldingPositions: 9 or 10 positions (SC = 4th outfielder)
+   - enforcePitcherCatcherRule / requireContiguousPitching:
+     baseball safety rules, typically off for softball
+   - maxPitcherInningsPerGame: per-game innings cap for pitchers
+   - fairness: maxConsecutiveSits, everyoneInfield
    ============================================ */
 
-import { POSITIONS, POSITION_TIERS } from './constants';
+import { POSITIONS, POSITION_GROUPS, POSITION_TIERS } from './constants';
 import type { Assignment, LineupMap, Player, Position } from './types';
 
 export interface AvoidOverride {
@@ -26,6 +33,18 @@ export interface SolveParams {
   maxSitsPerGame?: number;
   sitOverrides?: string[];
   avoidOverrides?: AvoidOverride[];
+  /** Positions to fill each inning (default: the 9 standard positions). */
+  fieldingPositions?: Position[];
+  /** No P<->C in consecutive innings (baseball safety rule). Default true. */
+  enforcePitcherCatcherRule?: boolean;
+  /** Pitching stints must be contiguous. Default true (off for softball). */
+  requireContiguousPitching?: boolean;
+  /** Cap on innings one player may pitch per game (null/undefined = no cap). */
+  maxPitcherInningsPerGame?: number | null;
+  /** Fairness: max innings a player may sit back-to-back (null = off). */
+  maxConsecutiveSits?: number | null;
+  /** Fairness: everyone plays a non-outfield position at least once. */
+  everyoneInfield?: boolean;
 }
 
 export interface SolveResult {
@@ -49,6 +68,10 @@ export interface SwapChange {
   from: Assignment | null;
   to: Assignment | null;
   type: 'manual' | 'displaced';
+}
+
+function isOutfield(pos: Assignment): boolean {
+  return POSITION_GROUPS.OUTFIELD.includes(pos as Position);
 }
 
 export const Solver = {
@@ -104,13 +127,27 @@ export const Solver = {
     return true;
   },
 
+  /** Innings this player is already pitching in the solution. */
+  getPitchingInningCount(playerId: string, solution: LineupMap): number {
+    let count = 0;
+    for (const [key, pos] of Object.entries(solution)) {
+      if (pos === 'P' && key.startsWith(`${playerId}-`)) count++;
+    }
+    return count;
+  },
+
   canAssignPosition(
     player: Player,
     position: Assignment,
     inning: number,
     solution: LineupMap,
     totalInnings: number,
-    avoidOverrides: Set<string> = new Set()
+    avoidOverrides: Set<string> = new Set(),
+    rules: {
+      enforcePitcherCatcherRule?: boolean;
+      requireContiguousPitching?: boolean;
+      maxPitcherInningsPerGame?: number | null;
+    } = {}
   ): boolean {
     if (position === 'SIT') return true;
     if (position === 'P' && !player.canPitch) return false;
@@ -120,11 +157,19 @@ export const Solver = {
     if (tier === POSITION_TIERS.AVOID && !avoidOverrides.has(`${player.id}-${position}`)) {
       return false;
     }
-    if (!this.checkPitcherCatcherRule(player, position, inning, solution, totalInnings)) {
+    const enforcePC = rules.enforcePitcherCatcherRule !== false;
+    if (enforcePC && !this.checkPitcherCatcherRule(player, position, inning, solution, totalInnings)) {
       return false;
     }
-    if (position === 'P' && !this.checkPitchingContiguity(player, inning, solution, totalInnings)) {
-      return false;
+    if (position === 'P') {
+      const requireContiguous = rules.requireContiguousPitching !== false;
+      if (requireContiguous && !this.checkPitchingContiguity(player, inning, solution, totalInnings)) {
+        return false;
+      }
+      const cap = rules.maxPitcherInningsPerGame;
+      if (cap != null && this.getPitchingInningCount(player.id, solution) >= cap) {
+        return false;
+      }
     }
     return true;
   },
@@ -140,8 +185,9 @@ export const Solver = {
       if (prefIndex === 2) return 10;
       return 15;
     }
-    if (tier === POSITION_TIERS.CAN_PLAY) return 50;
-    return 200;
+    if (tier === POSITION_TIERS.AVOID) return 200;
+    // canPlay, or unrated (e.g. SC for rosters created before 10-fielder support)
+    return 50;
   },
 
   /** Count total sits for a player in the solution. */
@@ -155,6 +201,26 @@ export const Solver = {
     return count;
   },
 
+  /** Consecutive sits ending at (and including) the given inning. */
+  getConsecutiveSitsEnding(playerId: string, inning: number, solution: LineupMap): number {
+    let count = 0;
+    for (let i = inning; i >= 1; i--) {
+      if (solution[`${playerId}-${i}`] === 'SIT') count++;
+      else break;
+    }
+    return count;
+  },
+
+  /** Has the player fielded a non-outfield position in the solution? */
+  hasInfieldInning(playerId: string, solution: LineupMap): boolean {
+    for (const [key, pos] of Object.entries(solution)) {
+      if (key.startsWith(`${playerId}-`) && pos !== 'SIT' && !isOutfield(pos)) {
+        return true;
+      }
+    }
+    return false;
+  },
+
   solve(params: SolveParams): SolveResult {
     const {
       players,
@@ -165,17 +231,26 @@ export const Solver = {
       pitcherAssignments = {},
       maxSitsPerGame = 2,
       sitOverrides = [],
-      avoidOverrides = []
+      avoidOverrides = [],
+      fieldingPositions = POSITIONS,
+      enforcePitcherCatcherRule = true,
+      requireContiguousPitching = true,
+      maxPitcherInningsPerGame = null,
+      maxConsecutiveSits = null,
+      everyoneInfield = false
     } = params;
 
-    if (players.length < 9) {
-      return { success: false, error: 'Need at least 9 players' };
+    const fielderCount = fieldingPositions.length;
+    if (players.length < fielderCount) {
+      return { success: false, error: `Need at least ${fielderCount} players` };
     }
 
     const solution: LineupMap = {};
     const warnings: string[] = [];
     const avoidOverrideSet = new Set(avoidOverrides.map(o => `${o.playerId}-${o.position}`));
     const sitOverrideSet = new Set(sitOverrides);
+    const assignmentRules = { enforcePitcherCatcherRule, requireContiguousPitching, maxPitcherInningsPerGame };
+    const infieldSlotsPerInning = fieldingPositions.filter(pos => !isOutfield(pos)).length;
 
     // Copy locked cells and existing assignments for innings before startInning
     for (const [key, pos] of Object.entries(lockedCells)) {
@@ -210,16 +285,32 @@ export const Solver = {
         }
       }
 
-      const neededPositions = POSITIONS.filter(pos => !positionsFilled[pos]);
+      const neededPositions = fieldingPositions.filter(pos => !positionsFilled[pos]);
       let availablePlayers = players.filter(p => !assigned.has(p.id));
+
+      // Fairness bookkeeping for this inning
+      const needsInfield = new Set<string>();
+      let infieldUrgent = false;
+      if (everyoneInfield) {
+        players.forEach(p => {
+          if (!this.hasInfieldInning(p.id, solution)) needsInfield.add(p.id);
+        });
+        const remainingInnings = innings - inning + 1;
+        // If the remaining innings after this one can't cover everyone still
+        // needing an infield turn, start placing them now.
+        infieldUrgent = needsInfield.size > (remainingInnings - 1) * infieldSlotsPerInning;
+      }
+      const atConsecutiveLimit = (playerId: string) =>
+        maxConsecutiveSits != null &&
+        this.getConsecutiveSitsEnding(playerId, inning - 1, solution) >= maxConsecutiveSits;
 
       // Sort positions by difficulty (fewest eligible candidates first)
       neededPositions.sort((a, b) => {
         const aCandidates = availablePlayers.filter(p =>
-          this.canAssignPosition(p, a, inning, solution, innings, avoidOverrideSet)
+          this.canAssignPosition(p, a, inning, solution, innings, avoidOverrideSet, assignmentRules)
         ).length;
         const bCandidates = availablePlayers.filter(p =>
-          this.canAssignPosition(p, b, inning, solution, innings, avoidOverrideSet)
+          this.canAssignPosition(p, b, inning, solution, innings, avoidOverrideSet, assignmentRules)
         ).length;
         return aCandidates - bCandidates;
       });
@@ -227,7 +318,7 @@ export const Solver = {
       // Fill each position
       for (const position of neededPositions) {
         const candidates = availablePlayers.filter(p =>
-          this.canAssignPosition(p, position, inning, solution, innings, avoidOverrideSet)
+          this.canAssignPosition(p, position, inning, solution, innings, avoidOverrideSet, assignmentRules)
         );
 
         if (candidates.length === 0) {
@@ -250,23 +341,50 @@ export const Solver = {
           return { success: false, error: `Cannot fill ${position} for inning ${inning}`, partialSolution: solution };
         }
 
-        // Sort candidates: prefer those with MORE sits (so they play more), then by preference.
-        // This helps balance - players who have sat a lot should get priority to play.
+        // Sort candidates, highest priority to play first:
+        // 1. at the consecutive-sit limit (must not sit again)
+        // 2. urgently needs an infield turn (everyoneInfield rule)
+        // 3. more total sits (sit balance)
+        // 4. still needs an infield turn (mild tiebreak on infield slots)
+        // 5. position preference
+        const infieldPosition = !isOutfield(position);
         candidates.sort((a, b) => {
+          const aMustPlay = atConsecutiveLimit(a.id) ? 1 : 0;
+          const bMustPlay = atConsecutiveLimit(b.id) ? 1 : 0;
+          if (aMustPlay !== bMustPlay) return bMustPlay - aMustPlay;
+
+          if (infieldPosition && infieldUrgent) {
+            const aUrgent = needsInfield.has(a.id) ? 1 : 0;
+            const bUrgent = needsInfield.has(b.id) ? 1 : 0;
+            if (aUrgent !== bUrgent) return bUrgent - aUrgent;
+          }
+
           const aSits = this.getTotalSits(a.id, solution);
           const bSits = this.getTotalSits(b.id, solution);
           if (aSits !== bSits) return bSits - aSits;
+
+          if (infieldPosition && everyoneInfield) {
+            const aNeeds = needsInfield.has(a.id) ? 1 : 0;
+            const bNeeds = needsInfield.has(b.id) ? 1 : 0;
+            if (aNeeds !== bNeeds) return bNeeds - aNeeds;
+          }
+
           return this.getPreferenceScore(a, position) - this.getPreferenceScore(b, position);
         });
 
         const chosen = candidates[0];
         solution[`${chosen.id}-${inning}`] = position;
+        if (!isOutfield(position)) needsInfield.delete(chosen.id);
         availablePlayers = availablePlayers.filter(p => p.id !== chosen.id);
       }
 
       // Remaining players need to sit - but check max sits.
-      // Sort by fewest sits first (they should sit before those at/near max).
+      // Sort by fewest sits first (they should sit before those at/near max);
+      // players at the consecutive-sit limit sort last.
       availablePlayers.sort((a, b) => {
+        const aLimit = atConsecutiveLimit(a.id) ? 1 : 0;
+        const bLimit = atConsecutiveLimit(b.id) ? 1 : 0;
+        if (aLimit !== bLimit) return aLimit - bLimit;
         const aSits = this.getTotalSits(a.id, solution);
         const bSits = this.getTotalSits(b.id, solution);
         return aSits - bSits;
@@ -308,6 +426,28 @@ export const Solver = {
         const newSitCount = this.getTotalSits(player.id, solution);
         if (newSitCount > maxSitsPerGame) {
           warnings.push(`${player.name} sits ${newSitCount} innings (target max: ${maxSitsPerGame})`);
+        }
+      }
+    }
+
+    // Fairness warnings over the finished solution
+    if (maxConsecutiveSits != null) {
+      for (const p of players) {
+        let run = 0;
+        let worst = 0;
+        for (let i = 1; i <= innings; i++) {
+          run = solution[`${p.id}-${i}`] === 'SIT' ? run + 1 : 0;
+          worst = Math.max(worst, run);
+        }
+        if (worst > maxConsecutiveSits) {
+          warnings.push(`${p.name} sits ${worst} innings in a row (target max: ${maxConsecutiveSits})`);
+        }
+      }
+    }
+    if (everyoneInfield) {
+      for (const p of players) {
+        if (!this.hasInfieldInning(p.id, solution)) {
+          warnings.push(`${p.name} never plays the infield`);
         }
       }
     }

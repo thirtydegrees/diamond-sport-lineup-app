@@ -3,7 +3,7 @@
    ============================================ */
 
 import React from 'react';
-import { POSITIONS, POSITION_TIERS } from '../domain/constants';
+import { POSITIONS, POSITION_LABELS, POSITION_TIERS } from '../domain/constants';
 import { Solver } from '../domain/solver';
 import { Storage } from '../services/storage';
 import { Alert, Checkbox, EmptyState, Modal, OptionItem, OptionList, PositionBadge } from './ui';
@@ -11,20 +11,17 @@ import { Alert, Checkbox, EmptyState, Modal, OptionItem, OptionList, PositionBad
 // ============================================
 // Player Editor Modal
 // ============================================
-export function PlayerEditorModal({ player, onSave, onClose }) {
+export function PlayerEditorModal({ player, positions = POSITIONS, onSave, onClose }) {
   const [name, setName] = React.useState(player?.name || '');
   const [canPitch, setCanPitch] = React.useState(player?.canPitch || false);
   const [prefersPitching, setPrefersPitching] = React.useState(player?.prefersPitching || false);
   const [canCatch, setCanCatch] = React.useState(player?.canCatch || false);
-  const [positions, setPositions] = React.useState(() => {
-    if (player?.positions && Object.keys(player.positions).length > 0) {
-      return player.positions;
-    }
+  const [positionTiers, setPositionTiers] = React.useState(() => {
     const initial = {};
-    POSITIONS.forEach(pos => {
-      initial[pos] = POSITION_TIERS.CAN_PLAY;
+    positions.forEach(pos => {
+      initial[pos] = player?.positions?.[pos] ?? POSITION_TIERS.CAN_PLAY;
     });
-    return initial;
+    return { ...player?.positions, ...initial };
   });
   const [preferredOrder, setPreferredOrder] = React.useState(player?.preferredOrder || []);
 
@@ -35,7 +32,7 @@ export function PlayerEditorModal({ player, onSave, onClose }) {
       return;
     }
 
-    const currentTier = positions[pos] || POSITION_TIERS.CAN_PLAY;
+    const currentTier = positionTiers[pos] || POSITION_TIERS.CAN_PLAY;
     let newTier;
 
     if (currentTier === POSITION_TIERS.CAN_PLAY) {
@@ -46,8 +43,7 @@ export function PlayerEditorModal({ player, onSave, onClose }) {
       newTier = POSITION_TIERS.CAN_PLAY;
     }
 
-    const newPositions = { ...positions, [pos]: newTier };
-    setPositions(newPositions);
+    setPositionTiers({ ...positionTiers, [pos]: newTier });
 
     // Update preferred order
     if (newTier === POSITION_TIERS.PREFERRED && !preferredOrder.includes(pos)) {
@@ -65,11 +61,11 @@ export function PlayerEditorModal({ player, onSave, onClose }) {
     if (!checked) {
       setPrefersPitching(false);
       // Set P to avoid if they can't pitch
-      setPositions({ ...positions, P: POSITION_TIERS.AVOID });
+      setPositionTiers({ ...positionTiers, P: POSITION_TIERS.AVOID });
       setPreferredOrder(preferredOrder.filter(p => p !== 'P'));
     } else {
       // Reset P to canPlay
-      setPositions({ ...positions, P: POSITION_TIERS.CAN_PLAY });
+      setPositionTiers({ ...positionTiers, P: POSITION_TIERS.CAN_PLAY });
     }
   };
 
@@ -78,11 +74,11 @@ export function PlayerEditorModal({ player, onSave, onClose }) {
     setCanCatch(checked);
     if (!checked) {
       // Set C to avoid if they can't catch
-      setPositions({ ...positions, C: POSITION_TIERS.AVOID });
+      setPositionTiers({ ...positionTiers, C: POSITION_TIERS.AVOID });
       setPreferredOrder(preferredOrder.filter(p => p !== 'C'));
     } else {
       // Reset C to canPlay
-      setPositions({ ...positions, C: POSITION_TIERS.CAN_PLAY });
+      setPositionTiers({ ...positionTiers, C: POSITION_TIERS.CAN_PLAY });
     }
   };
 
@@ -95,7 +91,7 @@ export function PlayerEditorModal({ player, onSave, onClose }) {
       canPitch,
       prefersPitching: canPitch && prefersPitching,
       canCatch,
-      positions,
+      positions: positionTiers,
       preferredOrder
     });
   };
@@ -157,8 +153,8 @@ export function PlayerEditorModal({ player, onSave, onClose }) {
           Tap to cycle: Can Play → Preferred → Avoid
         </p>
         <div className="position-grid">
-          {POSITIONS.map(pos => {
-            const tier = positions[pos] || POSITION_TIERS.CAN_PLAY;
+          {positions.map(pos => {
+            const tier = positionTiers[pos] || POSITION_TIERS.CAN_PLAY;
             const isDisabled = (pos === 'P' && !canPitch) || (pos === 'C' && !canCatch);
             const prefIndex = preferredOrder.indexOf(pos);
 
@@ -167,6 +163,7 @@ export function PlayerEditorModal({ player, onSave, onClose }) {
                 key={pos}
                 className={`position-option ${tier} ${isDisabled ? 'disabled' : ''}`}
                 onClick={() => cyclePositionTier(pos)}
+                title={POSITION_LABELS[pos]}
               >
                 {pos}
                 {prefIndex >= 0 && (
@@ -258,10 +255,10 @@ export function PitcherPickerModal({ inning, players, currentPitcherId, gameDate
 // ============================================
 // Position Picker Modal
 // ============================================
-export function PositionPickerModal({ player, inning, currentPosition, lineup, totalInnings, onSelect, onClose }) {
+export function PositionPickerModal({ player, inning, currentPosition, lineup, totalInnings, positions = POSITIONS, requireContiguousPitching = true, onSelect, onClose }) {
   // Check if assigning pitcher would violate contiguity
   const checkPitchingContiguity = (pos) => {
-    if (pos !== 'P') return true;
+    if (pos !== 'P' || !requireContiguousPitching) return true;
 
     // Find all innings where this player is already pitching
     const pitchingInnings = [];
@@ -287,7 +284,7 @@ export function PositionPickerModal({ player, inning, currentPosition, lineup, t
         Select a new position:
       </p>
       <div className="position-grid">
-        {POSITIONS.map(pos => {
+        {positions.map(pos => {
           const canPlay = Solver.canPlayerPlayPosition(player, pos);
           const pitchingOk = checkPitchingContiguity(pos);
           const isDisabled = !canPlay || !pitchingOk;
@@ -300,7 +297,7 @@ export function PositionPickerModal({ player, inning, currentPosition, lineup, t
               className={`position-option ${tier} ${isDisabled ? 'disabled' : ''} ${isCurrentPosition ? 'selected' : ''}`}
               onClick={() => !isDisabled && onSelect(pos)}
               style={isCurrentPosition ? { borderColor: 'var(--accent)', borderWidth: '3px' } : {}}
-              title={!pitchingOk ? 'Would create non-consecutive pitching' : ''}
+              title={!pitchingOk ? 'Would create non-consecutive pitching' : POSITION_LABELS[pos]}
             >
               {pos}
               {pos === 'P' && !pitchingOk && <span style={{ fontSize: '10px', display: 'block' }}>gap</span>}

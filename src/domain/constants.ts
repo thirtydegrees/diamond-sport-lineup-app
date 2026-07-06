@@ -2,15 +2,35 @@
    Diamond Lineup - Constants
    ============================================ */
 
-import type { Game, Player, Position, PositionTier, Settings } from './types';
+import type { FielderCount, Game, Player, Position, PositionTier, Settings } from './types';
 import { todayISO } from './dates';
 
 export const POSITIONS: Position[] = ['P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF'];
 
+/** 10-fielder configuration adds SC (short center / rover, the 4th outfielder). */
+export const POSITIONS_10: Position[] = [...POSITIONS, 'SC'];
+
+export function getFieldingPositions(fielderCount: FielderCount | undefined): Position[] {
+  return fielderCount === 10 ? POSITIONS_10 : POSITIONS;
+}
+
+export const POSITION_LABELS: Record<Position, string> = {
+  P: 'Pitcher',
+  C: 'Catcher',
+  '1B': 'First Base',
+  '2B': 'Second Base',
+  '3B': 'Third Base',
+  SS: 'Shortstop',
+  LF: 'Left Field',
+  CF: 'Center Field',
+  RF: 'Right Field',
+  SC: 'Short Center (4th OF)'
+};
+
 export const POSITION_GROUPS = {
   BATTERY: ['P', 'C'] as Position[],
   INFIELD: ['1B', '2B', '3B', 'SS'] as Position[],
-  OUTFIELD: ['LF', 'CF', 'RF'] as Position[]
+  OUTFIELD: ['LF', 'CF', 'RF', 'SC'] as Position[]
 };
 
 export const POSITION_TIERS = {
@@ -35,9 +55,17 @@ export function getPositionColorClass(pos: Position | 'SIT' | null | undefined):
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  sport: 'baseball',
+  fielderCount: 9,
   innings: 6,
   maxSitsPerGame: 2,
+  fairness: {
+    maxConsecutiveSits: null,
+    everyoneInfield: false
+  },
+  pitchRulePreset: 'pitch-smart-11-12',
   pitchRules: {
+    limitType: 'pitches',
     breakpoints: [
       { maxPitches: 20, restDays: 0 },
       { maxPitches: 35, restDays: 1 },
@@ -45,7 +73,12 @@ export const DEFAULT_SETTINGS: Settings = {
       { maxPitches: 65, restDays: 3 }
     ],
     absoluteMax: 85,
-    absoluteMaxRest: 4
+    absoluteMaxRest: 4,
+    inningsBreakpoints: [
+      { maxInnings: 2, restDays: 0 },
+      { maxInnings: 4, restDays: 1 }
+    ],
+    maxInningsPerGame: null
   },
   darkMode: false
 };
@@ -60,7 +93,7 @@ function demoPlayer(
   preferredOrder: Position[]
 ): Player {
   const positions: Partial<Record<Position, PositionTier>> = {};
-  POSITIONS.forEach(pos => {
+  POSITIONS_10.forEach(pos => {
     positions[pos] = tiers[pos] ?? POSITION_TIERS.CAN_PLAY;
   });
   return { id, name, canPitch, prefersPitching, canCatch, positions, preferredOrder };
@@ -95,7 +128,7 @@ export const DEMO_ROSTER: Player[] = [
 
 export function createBlankPlayer(): Player {
   const positions: Partial<Record<Position, PositionTier>> = {};
-  POSITIONS.forEach(pos => {
+  POSITIONS_10.forEach(pos => {
     positions[pos] = POSITION_TIERS.CAN_PLAY;
   });
 
@@ -116,6 +149,7 @@ export function createBlankGame(settings?: Settings): Game {
     date: todayISO(),
     opponent: '',
     innings: settings?.innings || DEFAULT_SETTINGS.innings,
+    fielderCount: settings?.fielderCount || DEFAULT_SETTINGS.fielderCount,
     battingOrder: [],
     availability: {},
     pitcherAssignments: {},

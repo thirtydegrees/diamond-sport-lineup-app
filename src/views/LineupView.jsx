@@ -10,6 +10,7 @@
    ============================================ */
 
 import React from 'react';
+import { getFieldingPositions } from '../domain/constants';
 import { formatDateLong } from '../domain/dates';
 import { Solver } from '../domain/solver';
 import { AppContext } from '../state/AppContext';
@@ -54,6 +55,8 @@ export function LineupView({ onBack }) {
   const [displacementModal, setDisplacementModal] = React.useState(null);
 
   const innings = game?.innings || settings.innings;
+  const fieldingPositions = getFieldingPositions(game?.fielderCount || settings.fielderCount);
+  const isSoftball = settings.sport === 'softball';
 
   const getActivePlayers = React.useCallback((g) => {
     if (!g?.battingOrder) return [];
@@ -87,7 +90,15 @@ export function LineupView({ onBack }) {
       pitcherAssignments: baseGame.pitcherAssignments || {},
       maxSitsPerGame: settings.maxSitsPerGame,
       avoidOverrides: effectiveAvoid,
-      sitOverrides: effectiveSit
+      sitOverrides: effectiveSit,
+      fieldingPositions: getFieldingPositions(baseGame.fielderCount || settings.fielderCount),
+      enforcePitcherCatcherRule: !isSoftball,
+      requireContiguousPitching: !isSoftball,
+      maxPitcherInningsPerGame: settings.pitchRules.limitType === 'innings'
+        ? settings.pitchRules.maxInningsPerGame
+        : null,
+      maxConsecutiveSits: settings.fairness.maxConsecutiveSits,
+      everyoneInfield: settings.fairness.everyoneInfield
     });
 
     if (result.success) {
@@ -107,7 +118,7 @@ export function LineupView({ onBack }) {
       setGame(baseGame);
       setError({ message: result.error, conflicts: result.conflicts });
     }
-  }, [avoidOverrides, sitOverrides, getActivePlayers, innings, settings.maxSitsPerGame, setGame]);
+  }, [avoidOverrides, sitOverrides, getActivePlayers, innings, settings, isSoftball, setGame]);
 
   const generateLineup = React.useCallback((fromInning = 1, opts = {}) => {
     runSolver(game, fromInning, opts);
@@ -375,10 +386,12 @@ export function LineupView({ onBack }) {
     runSolver({ ...game, innings: newInnings }, newInnings);
   };
 
-  // Save game
+  // Save game (also records innings pitched for rest tracking)
   const handleSaveGame = () => {
     Storage.addGame(game);
+    Storage.recordGamePitching(game);
     setGames(Storage.getGames());
+    setPitchHistory(Storage.getPitchHistory());
     alert('Game saved!');
   };
 
@@ -433,7 +446,7 @@ export function LineupView({ onBack }) {
     <div>
       {/* Print Header */}
       <div className="print-header">
-        <h1>⚾ {game.opponent ? `vs ${game.opponent}` : 'Game Lineup'}</h1>
+        <h1>{isSoftball ? '🥎' : '⚾'} {game.opponent ? `vs ${game.opponent}` : 'Game Lineup'}</h1>
         <p>{formatDateLong(game.date)}</p>
       </div>
 
@@ -577,6 +590,8 @@ export function LineupView({ onBack }) {
           currentPosition={positionModal.currentPosition}
           lineup={game.lineup}
           totalInnings={innings}
+          positions={fieldingPositions}
+          requireContiguousPitching={!isSoftball}
           onSelect={handlePositionSelect}
           onClose={() => setPositionModal(null)}
         />

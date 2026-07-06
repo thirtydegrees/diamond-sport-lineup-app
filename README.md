@@ -38,12 +38,25 @@ src/
 
 ### Solver rules
 
-Hard constraints: 9 positions filled per inning; pitch/catch eligibility;
-no P↔C in consecutive innings; contiguous pitching stints; "avoid" positions
+Hard constraints: all fielding positions filled per inning (9, or 10 with the
+SC short-center in youth softball configurations); pitch/catch eligibility;
+no P↔C in consecutive innings and contiguous pitching stints (baseball only —
+both relaxed for softball); per-game pitcher innings caps; "avoid" positions
 (unless explicitly overridden); locked cells; pitcher assignments.
 
 Soft constraints: total sits per player capped by settings (with per-game
-override prompt), sit counts spread evenly, position preferences honored.
+override prompt), sit counts spread evenly, optional fairness rules (max
+consecutive sits, everyone plays infield at least once — with warnings when
+they can't be met), position preferences honored.
+
+### Pitching rules
+
+League presets (Pitch Smart age bands used by Little League / Cal Ripken /
+PONY, plus softball no-limit and innings-based schemes) live in
+`src/domain/presets.ts`; editing any value switches to Custom. Three limit
+types: pitch-count breakpoints, innings-pitched breakpoints, or none.
+Saving a game records innings pitched from the lineup automatically, so
+rest tracking works even when the pitch counter isn't used.
 
 ### Dates
 
@@ -56,7 +69,7 @@ the *previous day* in US timezones.
 
 - [x] **Phase 0** – Real build tooling (Vite + TypeScript), solver test suite,
       date and re-solve bug fixes
-- [ ] **Phase 1** – Generalized rules engine: sport config (baseball/softball,
+- [x] **Phase 1** – Generalized rules engine: sport config (baseball/softball,
       9 or 10 fielders), league pitch-rule presets + custom rules
       (pitch-count and innings-based), toggleable fairness rules
 - [ ] **Phase 2** – Accounts + cloud sync (Supabase): set the lineup on a

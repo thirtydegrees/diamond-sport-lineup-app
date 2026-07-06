@@ -129,9 +129,13 @@ export function GameSetupView({ onStartGame }) {
   // Get available players
   const availablePlayers = battingOrder.filter(id => availability[id] !== false);
 
+  // Fielder count is snapshotted on the game so changing settings mid-season
+  // doesn't alter a game in progress
+  const fielderCount = game?.fielderCount || settings.fielderCount;
+
   // Player count warning
-  const playerCountWarning = availablePlayers.length > 14 ?
-    `With ${availablePlayers.length} players, ${availablePlayers.length - 9} must sit each inning. Sit balancing may be difficult.` :
+  const playerCountWarning = availablePlayers.length > fielderCount + 5 ?
+    `With ${availablePlayers.length} players, ${availablePlayers.length - fielderCount} must sit each inning. Sit balancing may be difficult.` :
     null;
 
   // Continue to lineup
@@ -141,6 +145,7 @@ export function GameSetupView({ onStartGame }) {
       date: gameDate,
       opponent,
       innings: gameInnings,
+      fielderCount,
       battingOrder: availablePlayers,
       availability,
       pitcherAssignments: game?.pitcherAssignments || {},
@@ -265,9 +270,9 @@ export function GameSetupView({ onStartGame }) {
       </div>
 
       {/* Warnings */}
-      {availablePlayers.length < 9 && (
+      {availablePlayers.length < fielderCount && (
         <Alert type="error">
-          Need at least 9 available players. Currently have {availablePlayers.length}.
+          Need at least {fielderCount} available players. Currently have {availablePlayers.length}.
         </Alert>
       )}
 
@@ -281,7 +286,7 @@ export function GameSetupView({ onStartGame }) {
       <button
         className="btn btn-primary btn-block"
         onClick={handleContinue}
-        disabled={availablePlayers.length < 9}
+        disabled={availablePlayers.length < fielderCount}
       >
         Continue to Lineup →
       </button>

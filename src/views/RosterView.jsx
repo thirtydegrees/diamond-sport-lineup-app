@@ -3,13 +3,13 @@
    ============================================ */
 
 import React from 'react';
-import { DEMO_ROSTER } from '../domain/constants';
+import { DEMO_ROSTER, getFieldingPositions } from '../domain/constants';
 import { AppContext } from '../state/AppContext';
 import { PlayerEditorModal } from '../components/modals';
 import { EmptyState, PlayerTag } from '../components/ui';
 
 export function RosterView() {
-  const { roster, setRoster } = React.useContext(AppContext);
+  const { roster, setRoster, settings } = React.useContext(AppContext);
   const [editingPlayer, setEditingPlayer] = React.useState(null);
   const [showEditor, setShowEditor] = React.useState(false);
 
@@ -114,6 +114,7 @@ export function RosterView() {
       {showEditor && (
         <PlayerEditorModal
           player={editingPlayer}
+          positions={getFieldingPositions(settings.fielderCount)}
           onSave={handleSavePlayer}
           onClose={() => { setShowEditor(false); setEditingPlayer(null); }}
         />

@@ -15,6 +15,8 @@ import { HistoryView } from './views/HistoryView';
 // Navigation Component
 // ============================================
 function Navigation({ currentView, onViewChange }) {
+  const { settings } = React.useContext(AppContext);
+  const sportEmoji = settings.sport === 'softball' ? '🥎' : '⚾';
   const tabs = [
     { id: 'roster', label: 'Roster' },
     { id: 'game', label: 'Game' },
@@ -26,7 +28,7 @@ function Navigation({ currentView, onViewChange }) {
   return (
     <nav className="nav">
       <div className="nav-content">
-        <span className="nav-title">⚾ Diamond Lineup</span>
+        <span className="nav-title">{sportEmoji} Diamond Lineup</span>
         <div className="nav-tabs">
           {tabs.map(tab => (
             <button

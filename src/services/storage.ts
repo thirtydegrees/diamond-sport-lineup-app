@@ -87,10 +87,14 @@ export const Storage = {
 
   getSettings(): Settings {
     const saved = this._get<Partial<Settings>>(StorageKeys.SETTINGS, {});
-    // Merge with defaults to ensure all fields exist
+    // Merge with defaults so fields added in later versions exist
     return {
       ...DEFAULT_SETTINGS,
       ...saved,
+      fairness: {
+        ...DEFAULT_SETTINGS.fairness,
+        ...(saved.fairness || {})
+      },
       pitchRules: {
         ...DEFAULT_SETTINGS.pitchRules,
         ...(saved.pitchRules || {})
@@ -205,6 +209,35 @@ export const Storage = {
     return this.getPitchHistory().filter(r => r.playerId === playerId);
   },
 
+  /**
+   * Record pitching workload from a game's lineup. Called on game save so
+   * innings-pitched is tracked even when the pitch counter was never opened
+   * (softball leagues usually track innings, not pitches).
+   */
+  recordGamePitching(game: Game): boolean {
+    const inningsByPlayer: Record<string, number> = {};
+    for (const [key, pos] of Object.entries(game.lineup || {})) {
+      if (pos !== 'P') continue;
+      const playerId = key.slice(0, key.lastIndexOf('-'));
+      inningsByPlayer[playerId] = (inningsByPlayer[playerId] || 0) + 1;
+    }
+
+    let ok = true;
+    for (const [playerId, inningsPitched] of Object.entries(inningsByPlayer)) {
+      const pitchLog = game.pitchLog?.[playerId] || {};
+      const pitches = Object.values(pitchLog).reduce((a, b) => a + b, 0);
+      ok = this.addPitchRecord({
+        playerId,
+        gameId: game.id,
+        date: game.date,
+        pitches,
+        innings: pitchLog,
+        inningsPitched
+      }) && ok;
+    }
+    return ok;
+  },
+
   /** Pitcher eligibility for a game date based on rest rules. */
   getPitcherEligibility(playerId: string, gameDate: string): PitcherEligibility {
     const history = this.getPitchHistoryForPlayer(playerId);
@@ -262,28 +295,44 @@ export function computePitcherEligibility(
   rules: Settings['pitchRules'],
   gameDate: string
 ): PitcherEligibility {
-  if (history.length === 0) {
+  if (rules.limitType === 'none' || history.length === 0) {
     return { eligible: true, reason: 'Eligible', daysRest: null };
   }
 
   const sorted = [...history].sort((a, b) => compareDatesDesc(a.date, b.date));
-  const lastPitched = sorted[0];
+  const lastOuting = sorted[0];
+  const lastInningsPitched = lastOuting.inningsPitched
+    ?? Object.keys(lastOuting.innings || {}).length;
 
-  const daysSince = daysBetween(lastPitched.date, gameDate);
+  const daysSince = daysBetween(lastOuting.date, gameDate);
 
-  // Find required rest days based on pitches thrown
+  // Find required rest days from the breakpoint table for the active scheme
   let requiredRest = 0;
-  for (const bp of rules.breakpoints) {
-    if (lastPitched.pitches <= bp.maxPitches) {
-      requiredRest = bp.restDays;
-      break;
+  if (rules.limitType === 'innings') {
+    let matched = false;
+    for (const bp of rules.inningsBreakpoints) {
+      if (lastInningsPitched <= bp.maxInnings) {
+        requiredRest = bp.restDays;
+        matched = true;
+        break;
+      }
     }
-  }
-
-  // Check if exceeded all breakpoints
-  const lastBreakpoint = rules.breakpoints[rules.breakpoints.length - 1];
-  if (lastPitched.pitches > lastBreakpoint.maxPitches) {
-    requiredRest = rules.absoluteMaxRest;
+    // Beyond the highest breakpoint: use the last breakpoint's rest
+    if (!matched && rules.inningsBreakpoints.length > 0) {
+      requiredRest = rules.inningsBreakpoints[rules.inningsBreakpoints.length - 1].restDays;
+    }
+  } else {
+    for (const bp of rules.breakpoints) {
+      if (lastOuting.pitches <= bp.maxPitches) {
+        requiredRest = bp.restDays;
+        break;
+      }
+    }
+    // Check if exceeded all breakpoints
+    const lastBreakpoint = rules.breakpoints[rules.breakpoints.length - 1];
+    if (lastBreakpoint && lastOuting.pitches > lastBreakpoint.maxPitches) {
+      requiredRest = rules.absoluteMaxRest;
+    }
   }
 
   if (daysSince >= requiredRest) {
@@ -291,7 +340,8 @@ export function computePitcherEligibility(
       eligible: true,
       reason: 'Eligible',
       daysRest: daysSince,
-      lastPitched: lastPitched.pitches
+      lastPitched: lastOuting.pitches,
+      lastInningsPitched
     };
   }
 
@@ -301,6 +351,7 @@ export function computePitcherEligibility(
     reason: `${daysNeeded}d rest`,
     daysRest: daysSince,
     daysNeeded,
-    lastPitched: lastPitched.pitches
+    lastPitched: lastOuting.pitches,
+    lastInningsPitched
   };
 }
