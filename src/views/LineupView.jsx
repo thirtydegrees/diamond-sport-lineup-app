@@ -12,7 +12,6 @@
 import React from 'react';
 import { getFieldingPositions } from '../domain/constants';
 import { formatDateLong } from '../domain/dates';
-import { newId } from '../domain/ids';
 import { Solver } from '../domain/solver';
 import { AppContext } from '../state/AppContext';
 import { Storage } from '../services/storage';
@@ -149,6 +148,41 @@ export function LineupView({ onBack }) {
     }
   };
 
+  // When the Next Inning flow opens the pitcher picker (no pitcher assigned),
+  // chain into the pitch counter once a pitcher is chosen
+  const autoCounterAfterPick = React.useRef(false);
+
+  /**
+   * Advance the game one inning: finalize the outgoing pitcher's record,
+   * move the current-inning marker, and open the pitch counter for the
+   * incoming pitcher (or the picker if the inning has none). On the last
+   * inning it finishes and saves the game instead.
+   */
+  const handleNextInning = () => {
+    // Finalize whoever pitched the inning we're leaving
+    const outgoing = getPitcherAt(currentInning);
+    if (outgoing && game.pitchLog?.[outgoing.id]) {
+      persistPitching(outgoing);
+    }
+
+    if (currentInning >= innings) {
+      handleSaveGame();
+      return;
+    }
+
+    const next = currentInning + 1;
+    setCurrentInning(next);
+    setGame({ ...game, currentInning: next });
+
+    const incoming = getPitcherAt(next);
+    if (incoming) {
+      setPitchCounterModal({ player: incoming, inning: next });
+    } else {
+      autoCounterAfterPick.current = true;
+      setPitcherModal(next);
+    }
+  };
+
   // Handle pitcher assignment
   const handlePitcherAssign = (playerId) => {
     const inning = pitcherModal;
@@ -182,6 +216,16 @@ export function LineupView({ onBack }) {
       lockedCells: newLocks,
       lineup: newLineup
     }, inning);
+
+    // Next Inning flow: picker was opened automatically, so continue
+    // straight into the pitch counter for the chosen pitcher
+    if (autoCounterAfterPick.current) {
+      autoCounterAfterPick.current = false;
+      const player = roster.find(p => p.id === playerId);
+      if (player) {
+        setPitchCounterModal({ player, inning });
+      }
+    }
   };
 
   // Handle cell click
@@ -334,45 +378,36 @@ export function LineupView({ onBack }) {
     setGame({ ...game, pitchLog: newPitchLog });
   };
 
-  // End pitching inning
-  const handleEndPitchingInning = () => {
-    const { player } = pitchCounterModal;
-    const pitcherLog = game.pitchLog?.[player.id] || {};
+  /** Save a pitcher's game workload to pitch history (upsert by player+game). */
+  const persistPitching = React.useCallback((player, baseGame = game) => {
+    const pitcherLog = baseGame.pitchLog?.[player.id] || {};
     const totalPitches = Object.values(pitcherLog).reduce((a, b) => a + b, 0);
+    const inningsPitched = Object.entries(baseGame.lineup || {})
+      .filter(([key, pos]) => pos === 'P' && key.startsWith(`${player.id}-`)).length;
 
-    // Save to pitch history
     Storage.addPitchRecord({
       playerId: player.id,
-      gameId: game.id,
-      date: game.date,
+      gameId: baseGame.id,
+      date: baseGame.date,
       pitches: totalPitches,
-      innings: pitcherLog
+      innings: pitcherLog,
+      inningsPitched: inningsPitched || undefined
     });
+    setPitchHistory(Storage.getPitchHistory());
+  }, [game, setPitchHistory]);
 
-    // Update local state
-    const existingRecord = pitchHistory.find(r =>
-      r.playerId === player.id && r.gameId === game.id
-    );
-
-    if (existingRecord) {
-      setPitchHistory(pitchHistory.map(r =>
-        r.id === existingRecord.id
-          ? { ...r, pitches: totalPitches, innings: pitcherLog }
-          : r
-      ));
-    } else {
-      setPitchHistory([...pitchHistory, {
-        id: newId(),
-        playerId: player.id,
-        gameId: game.id,
-        date: game.date,
-        pitches: totalPitches,
-        innings: pitcherLog
-      }]);
-    }
-
+  // End pitching inning (from the counter's End Inning button)
+  const handleEndPitchingInning = () => {
+    persistPitching(pitchCounterModal.player);
     setPitchCounterModal(null);
   };
+
+  /** The player fielding P in a given inning, if any. */
+  const getPitcherAt = React.useCallback((inning, baseGame = game) => {
+    return getActivePlayers(baseGame).find(
+      p => (baseGame.lineup || {})[`${p.id}-${inning}`] === 'P'
+    ) || null;
+  }, [game, getActivePlayers]);
 
   // Handle score update
   const handleScoreChange = (team, inning, value) => {
@@ -487,6 +522,18 @@ export function LineupView({ onBack }) {
             }}
             onAddInning={handleAddInning}
           />
+          <button
+            className="btn btn-primary btn-block"
+            style={{ marginTop: 'var(--space-md)' }}
+            onClick={handleNextInning}
+          >
+            {currentInning >= innings ? '🏁 Finish & Save Game' : `▶ Next Inning (${currentInning + 1})`}
+          </button>
+          <p className="form-hint" style={{ textAlign: 'center' }}>
+            {currentInning >= innings
+              ? 'Logs the final pitch counts and saves the game to history.'
+              : 'Logs this inning\'s pitch count and opens the counter for the next pitcher.'}
+          </p>
         </div>
       </div>
 
@@ -570,7 +617,7 @@ export function LineupView({ onBack }) {
           currentPitcherId={game.pitcherAssignments?.[pitcherModal]}
           gameDate={game.date}
           onSelect={handlePitcherAssign}
-          onClose={() => setPitcherModal(null)}
+          onClose={() => { autoCounterAfterPick.current = false; setPitcherModal(null); }}
         />
       )}
 

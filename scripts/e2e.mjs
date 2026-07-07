@@ -130,12 +130,42 @@ const counted = (await page.textContent('.pitch-counter-display')).trim();
 counted === '5' ? ok('pitch counter counts to 5') : fail(`pitch counter shows ${counted}`);
 await page.click('text=End Inning');
 
+// Next Inning flow: advances the inning, auto-opens the counter for the
+// incoming pitcher, and persists counts even when the coach just closes it
+await page.waitForSelector('button:has-text("Next Inning (2)")');
+await page.click('button:has-text("Next Inning (2)")');
+await page.waitForSelector('.pitch-counter');
+const inn2Pitcher = (await page.textContent('.pitch-counter-name')).trim();
+ok(`next inning auto-opens the counter (${inn2Pitcher} pitching inning 2)`);
+
+const pitchesBefore = parseInt(await page.textContent('.pitch-counter-display'), 10);
+await page.click('.pitch-btn-plus');
+await page.click('.pitch-btn-plus');
+const pitchesAfter = parseInt(await page.textContent('.pitch-counter-display'), 10);
+pitchesAfter - pitchesBefore === 2 ? ok('counter tracks pitches in the new inning') : fail(`counter went ${pitchesBefore} -> ${pitchesAfter}`);
+
+// Close WITHOUT End Inning - the coach can always dismiss it
+await page.click('.pitch-counter-actions button:has-text("Close")');
+await page.waitForSelector('.pitch-counter', { state: 'detached' });
+ok('auto-opened counter can be dismissed without ending the inning');
+
+let currentHdr = (await page.textContent('.lineup-cell.header.current')).trim();
+currentHdr === '2' ? ok('grid highlights inning 2 as current') : fail(`current inning header: ${currentHdr}`);
+
+// Advancing again must persist the dismissed counter's pitches automatically
+await page.click('button:has-text("Next Inning (3)")');
+await page.waitForSelector('.pitch-counter');
+await page.click('.pitch-counter-actions button:has-text("Close")');
+currentHdr = (await page.textContent('.lineup-cell.header.current')).trim();
+currentHdr === '3' ? ok('second advance lands on inning 3') : fail(`current inning header: ${currentHdr}`);
+
 // Stats tab
 await page.click('.nav-tab:has-text("Stats")');
 await page.waitForSelector('text=Playing Time by Position');
 
+// 5 counted in inning 1 (End Inning) + 2 in inning 2 (persisted by Next Inning)
 const kpiPitches = (await page.locator('.stat-card:has(.stat-label:text-is("Pitches")) .stat-value').textContent()).trim();
-kpiPitches === '5' ? ok('KPI shows 5 pitches logged') : fail(`Pitches KPI: ${kpiPitches}`);
+kpiPitches === '7' ? ok('KPI shows 7 pitches (incl. counts persisted by Next Inning)') : fail(`Pitches KPI: ${kpiPitches}`);
 
 const segCount = await page.locator('.hbar-seg').count();
 segCount >= 12 ? ok(`position distribution renders (${segCount} segments)`) : fail(`only ${segCount} segments`);
