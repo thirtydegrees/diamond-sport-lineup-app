@@ -167,6 +167,9 @@ export const Storage = {
   },
 
   deleteGame(gameId: string): boolean {
+    // Purge the game's pitch records too - otherwise the deleted game's
+    // workload would still drive rest eligibility and season stats
+    this.savePitchHistory(this.getPitchHistory().filter(r => r.gameId !== gameId));
     return this.saveGames(this.getGames().filter(g => g.id !== gameId));
   },
 

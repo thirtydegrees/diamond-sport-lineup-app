@@ -1477,6 +1477,52 @@ body {
 }
 
 /* --------------------------------------------
+   Toasts
+   -------------------------------------------- */
+.toast-stack {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--space-lg) + env(safe-area-inset-bottom, 0px));
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+  pointer-events: none;
+}
+
+.toast {
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  padding: var(--space-md) var(--space-xl);
+  border-radius: var(--radius-lg);
+  font-size: 15px;
+  font-weight: 500;
+  box-shadow: var(--shadow-lg);
+  animation: toast-in 0.2s ease-out;
+  max-width: min(90vw, 420px);
+  text-align: center;
+}
+
+.toast-error {
+  background: var(--danger);
+  color: white;
+}
+
+@keyframes toast-in {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@media (max-width: 640px) {
+  /* Clear the bottom tab bar */
+  .toast-stack {
+    bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* --------------------------------------------
    Utility Classes
    -------------------------------------------- */
 .text-center { text-align: center; }

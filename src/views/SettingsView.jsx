@@ -3,15 +3,19 @@
    ============================================ */
 
 import React from 'react';
+import { todayISO } from '../domain/dates';
 import { AppContext } from '../state/AppContext';
 import { Storage } from '../services/storage';
 import { CUSTOM_PRESET_ID, getPreset, getPresetsForSport } from '../domain/presets';
-import { Toggle } from '../components/ui';
+import { ConfirmDialog, Toggle } from '../components/ui';
 
 export function SettingsView() {
-  const { settings, setSettings, roster } = React.useContext(AppContext);
+  const { settings, setSettings, roster, showToast } = React.useContext(AppContext);
   // Bump to re-read Storage-backed values (default batting order) after changes
   const [, setRefresh] = React.useState(0);
+  const [confirmClearAll, setConfirmClearAll] = React.useState(false);
+  const [importPending, setImportPending] = React.useState(null);
+  const importInputRef = React.useRef(null);
 
   const updateSetting = (key, value) => {
     setSettings({ ...settings, [key]: value });
@@ -75,19 +79,67 @@ export function SettingsView() {
     const currentOrder = roster.map(p => p.id);
     Storage.saveDefaultBattingOrder(currentOrder);
     setRefresh(n => n + 1);
-    alert('Default batting order saved!');
+    showToast('Default batting order saved');
   };
 
   const handleClearDefaultOrder = () => {
     Storage.clearDefaultBattingOrder();
     setRefresh(n => n + 1);
-    alert('Default batting order cleared.');
+    showToast('Default batting order cleared');
   };
 
-  const handleClearAllData = () => {
-    if (confirm('Delete ALL data? This includes roster, games, pitch history, and settings. This cannot be undone.')) {
-      Storage.clearAllData();
+  // ----------------------------------------
+  // Backup & restore
+  // ----------------------------------------
+
+  const handleExport = () => {
+    const data = Storage.exportAllData();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `diamond-lineup-backup-${todayISO()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast('Backup downloaded');
+  };
+
+  const handleImportFile = (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // allow re-selecting the same file
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (typeof data !== 'object' || data === null || !Array.isArray(data.roster)) {
+          throw new Error('not a Diamond Lineup backup');
+        }
+        setImportPending({
+          data,
+          summary: `${data.roster.length} players, ${data.games?.length || 0} saved games, ` +
+                   `${data.pitchHistory?.length || 0} pitch records` +
+                   (data.exportDate ? ` (exported ${data.exportDate.split('T')[0]})` : '')
+        });
+      } catch (err) {
+        showToast(`Couldn't read that file: ${err.message}`, 'error');
+      }
+    };
+    reader.onerror = () => showToast("Couldn't read that file", 'error');
+    reader.readAsText(file);
+  };
+
+  const handleImportConfirm = () => {
+    const ok = Storage.importAllData(importPending.data);
+    setImportPending(null);
+    if (ok) {
+      // Reload so all state re-initializes from the imported data
       window.location.reload();
+    } else {
+      showToast('Import failed - nothing was changed', 'error');
     }
   };
 
@@ -422,13 +474,41 @@ export function SettingsView() {
         </div>
       </div>
 
+      {/* Backup & Restore */}
+      <div className="card">
+        <div className="card-header">
+          <div className="card-title">Backup & Restore</div>
+        </div>
+        <div className="card-body">
+          <p className="text-muted text-small mb-md">
+            Everything is stored on this device. Download a backup after games, and use
+            it to move your season between your computer and phone.
+          </p>
+          <div style={{ display: 'flex', gap: 'var(--space-sm)', flexWrap: 'wrap' }}>
+            <button className="btn btn-primary" onClick={handleExport}>
+              ⬇️ Download Backup
+            </button>
+            <button className="btn btn-secondary" onClick={() => importInputRef.current?.click()}>
+              ⬆️ Restore from Backup
+            </button>
+            <input
+              ref={importInputRef}
+              type="file"
+              accept=".json,application/json"
+              style={{ display: 'none' }}
+              onChange={handleImportFile}
+            />
+          </div>
+        </div>
+      </div>
+
       {/* Data Management */}
       <div className="card">
         <div className="card-header">
           <div className="card-title">Data</div>
         </div>
         <div className="card-body">
-          <button className="btn btn-danger" onClick={handleClearAllData}>
+          <button className="btn btn-danger" onClick={() => setConfirmClearAll(true)}>
             Clear All Data
           </button>
           <p className="form-hint mt-sm">
@@ -436,6 +516,28 @@ export function SettingsView() {
           </p>
         </div>
       </div>
+
+      {confirmClearAll && (
+        <ConfirmDialog
+          title="Clear All Data"
+          message="Delete ALL data? This includes your roster, saved games, pitch history, and settings. This cannot be undone - consider downloading a backup first."
+          confirmLabel="Delete Everything"
+          danger
+          onConfirm={() => { Storage.clearAllData(); window.location.reload(); }}
+          onCancel={() => setConfirmClearAll(false)}
+        />
+      )}
+
+      {importPending && (
+        <ConfirmDialog
+          title="Restore from Backup"
+          message={`Replace the data on this device with the backup? It contains ${importPending.summary}.`}
+          confirmLabel="Restore"
+          danger
+          onConfirm={handleImportConfirm}
+          onCancel={() => setImportPending(null)}
+        />
+      )}
     </div>
   );
 }

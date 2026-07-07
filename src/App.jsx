@@ -4,6 +4,8 @@
 
 import React from 'react';
 import { AppContext, AppProvider } from './state/AppContext';
+import { ConfirmDialog } from './components/ui';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { RosterView } from './views/RosterView';
 import { SettingsView } from './views/SettingsView';
 import { GameSetupView } from './views/GameSetupView';
@@ -56,6 +58,7 @@ function AppContent() {
   const [view, setView] = React.useState('roster');
   const [showLineup, setShowLineup] = React.useState(false);
   const [showGameChoice, setShowGameChoice] = React.useState(false);
+  const [confirmNewGame, setConfirmNewGame] = React.useState(false);
 
   const handleViewChange = (newView) => {
     if (newView === 'game') {
@@ -87,10 +90,11 @@ function AppContent() {
   };
 
   const handleNewGame = () => {
-    // Clear the current game
+    // Clear the current game (only after explicit confirmation)
     setGame(null);
     setShowLineup(false);
     setShowGameChoice(false);
+    setConfirmNewGame(false);
   };
 
   return (
@@ -115,7 +119,7 @@ function AppContent() {
                   <button className="btn btn-primary btn-block" onClick={handleContinueGame}>
                     Continue Current Game
                   </button>
-                  <button className="btn btn-secondary btn-block" onClick={handleNewGame}>
+                  <button className="btn btn-secondary btn-block" onClick={() => setConfirmNewGame(true)}>
                     Start New Game
                   </button>
                 </div>
@@ -140,14 +144,27 @@ function AppContent() {
 
         {view === 'settings' && <SettingsView />}
       </main>
+
+      {confirmNewGame && (
+        <ConfirmDialog
+          title="Start New Game"
+          message="Discard the current game and start fresh? If you haven't saved it, its lineup and pitch counts will be lost."
+          confirmLabel="Discard & Start New"
+          danger
+          onConfirm={handleNewGame}
+          onCancel={() => setConfirmNewGame(false)}
+        />
+      )}
     </div>
   );
 }
 
 export function App() {
   return (
-    <AppProvider>
-      <AppContent />
-    </AppProvider>
+    <ErrorBoundary>
+      <AppProvider>
+        <AppContent />
+      </AppProvider>
+    </ErrorBoundary>
   );
 }

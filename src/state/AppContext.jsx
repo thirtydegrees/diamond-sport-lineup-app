@@ -3,6 +3,7 @@
    ============================================ */
 
 import React from 'react';
+import { newId } from '../domain/ids';
 import { Storage } from '../services/storage';
 
 export const AppContext = React.createContext(null);
@@ -14,6 +15,15 @@ export function AppProvider({ children }) {
   const [game, setGame] = React.useState(() => Storage.getCurrentGame());
   const [games, setGames] = React.useState(() => Storage.getGames());
   const [pitchHistory, setPitchHistory] = React.useState(() => Storage.getPitchHistory());
+  const [toasts, setToasts] = React.useState([]);
+
+  const showToast = React.useCallback((message, type = 'success') => {
+    const id = newId();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 2600);
+  }, []);
 
   // Persist changes to storage
   React.useEffect(() => {
@@ -54,12 +64,20 @@ export function AppProvider({ children }) {
     games,
     setGames,
     pitchHistory,
-    setPitchHistory
+    setPitchHistory,
+    showToast
   };
 
   return (
     <AppContext.Provider value={value}>
       {children}
+      <div className="toast-stack" aria-live="polite">
+        {toasts.map(t => (
+          <div key={t.id} className={`toast toast-${t.type}`}>
+            {t.message}
+          </div>
+        ))}
+      </div>
     </AppContext.Provider>
   );
 }

@@ -24,6 +24,11 @@ npm run test:e2e   # browser E2E suite (build + preview on :4173 first;
 The app is an installable PWA: coaches can add it to their phone's home
 screen and it works offline in the dugout (all assets are precached by a
 service worker; data lives locally until cloud sync arrives in Phase 2).
+Settings → Backup & Restore downloads the whole season as a JSON file and
+restores it on another device — the manual laptop↔phone bridge until sync.
+
+CI (GitHub Actions) runs the type-check, build, unit tests, and the full
+browser E2E suite on every push.
 
 ## Architecture
 
@@ -88,4 +93,7 @@ the *previous day* in US timezones.
       bench-time equity, pitcher workload with per-outing history and a
       season/30-day/7-day filter; every chart has a table view and the
       palette is CVD-validated in both themes
+- [x] **Hardening** – JSON backup/restore, game history detail + delete,
+      in-app dialogs and toasts (no native popups), discard-game guardrail,
+      crash-safe error boundary, CI pipeline
 - [ ] **Phase 5** – Hosted beta on Vercel; payments later

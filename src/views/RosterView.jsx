@@ -6,12 +6,14 @@ import React from 'react';
 import { DEMO_ROSTER, getFieldingPositions } from '../domain/constants';
 import { AppContext } from '../state/AppContext';
 import { PlayerEditorModal } from '../components/modals';
-import { EmptyState, PlayerTag } from '../components/ui';
+import { ConfirmDialog, EmptyState, PlayerTag } from '../components/ui';
 
 export function RosterView() {
-  const { roster, setRoster, settings } = React.useContext(AppContext);
+  const { roster, setRoster, settings, showToast } = React.useContext(AppContext);
   const [editingPlayer, setEditingPlayer] = React.useState(null);
   const [showEditor, setShowEditor] = React.useState(false);
+  const [deleteTarget, setDeleteTarget] = React.useState(null);
+  const [confirmDemo, setConfirmDemo] = React.useState(false);
 
   const handleSavePlayer = (player) => {
     if (editingPlayer) {
@@ -23,15 +25,17 @@ export function RosterView() {
     setEditingPlayer(null);
   };
 
-  const handleDeletePlayer = (playerId) => {
-    if (confirm('Delete this player from the roster?')) {
-      setRoster(roster.filter(p => p.id !== playerId));
-    }
+  const handleDeletePlayer = () => {
+    setRoster(roster.filter(p => p.id !== deleteTarget.id));
+    showToast(`${deleteTarget.name} removed from roster`);
+    setDeleteTarget(null);
   };
 
   const handleLoadDemo = () => {
-    if (roster.length === 0 || confirm('Replace current roster with demo data? This will overwrite existing players.')) {
+    if (roster.length === 0) {
       setRoster(DEMO_ROSTER);
+    } else {
+      setConfirmDemo(true);
     }
   };
 
@@ -100,7 +104,7 @@ export function RosterView() {
                 </div>
                 <button
                   className="btn-icon"
-                  onClick={(e) => { e.stopPropagation(); handleDeletePlayer(player.id); }}
+                  onClick={(e) => { e.stopPropagation(); setDeleteTarget(player); }}
                   aria-label="Delete player"
                 >
                   🗑️
@@ -117,6 +121,28 @@ export function RosterView() {
           positions={getFieldingPositions(settings.fielderCount)}
           onSave={handleSavePlayer}
           onClose={() => { setShowEditor(false); setEditingPlayer(null); }}
+        />
+      )}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Remove Player"
+          message={`Remove ${deleteTarget.name} from the roster? Their game history stays in saved games.`}
+          confirmLabel="Remove"
+          danger
+          onConfirm={handleDeletePlayer}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      )}
+
+      {confirmDemo && (
+        <ConfirmDialog
+          title="Load Demo Roster"
+          message={`Replace your ${roster.length} current players with the 12-player demo roster?`}
+          confirmLabel="Replace"
+          danger
+          onConfirm={() => { setRoster(DEMO_ROSTER); setConfirmDemo(false); }}
+          onCancel={() => setConfirmDemo(false)}
         />
       )}
     </div>

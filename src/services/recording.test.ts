@@ -65,3 +65,24 @@ describe('recordGamePitching', () => {
     expect(Storage.getPitchHistory()).toHaveLength(3);
   });
 });
+
+describe('deleteGame', () => {
+  beforeEach(() => store.clear());
+
+  it('purges the game\'s pitch records so phantom outings can\'t drive rest rules', () => {
+    const game = gameWithPitchers();
+    Storage.addGame(game);
+    Storage.recordGamePitching(game);
+    Storage.addPitchRecord({
+      playerId: 'a', gameId: 'other-game', date: '2026-06-20',
+      pitches: 40, innings: {}
+    });
+
+    Storage.deleteGame(game.id);
+
+    expect(Storage.getGames()).toHaveLength(0);
+    const history = Storage.getPitchHistory();
+    expect(history).toHaveLength(1);
+    expect(history[0].gameId).toBe('other-game');
+  });
+});

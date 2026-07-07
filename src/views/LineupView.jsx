@@ -30,7 +30,7 @@ import { InningSelector, LineupGrid, LineupStats, PitcherAssignments } from '../
 import { Alert, Modal, OptionItem, OptionList } from '../components/ui';
 
 export function LineupView({ onBack }) {
-  const { roster, settings, game, setGame, setGames, pitchHistory, setPitchHistory } = React.useContext(AppContext);
+  const { roster, settings, game, setGame, setGames, pitchHistory, setPitchHistory, showToast } = React.useContext(AppContext);
 
   const [currentInning, setCurrentInning] = React.useState(game?.currentInning || 1);
   const [error, setError] = React.useState(null);
@@ -393,7 +393,7 @@ export function LineupView({ onBack }) {
     Storage.recordGamePitching(game);
     setGames(Storage.getGames());
     setPitchHistory(Storage.getPitchHistory());
-    alert('Game saved!');
+    showToast('Game saved');
   };
 
   // Handle avoid override selection

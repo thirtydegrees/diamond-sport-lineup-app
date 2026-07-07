@@ -1,11 +1,21 @@
 /* End-to-end smoke test: demo roster -> game setup -> auto-generated lineup.
    Runs in America/Denver to verify the date fix in a US timezone. */
 import { chromium } from 'playwright-core';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 const fail = (msg) => { console.error('FAIL: ' + msg); process.exitCode = 1; };
 const ok = (msg) => console.log('OK: ' + msg);
 
-const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium' });
+const ARTIFACTS = process.env.SCRATCH || '.e2e-artifacts';
+mkdirSync(ARTIFACTS, { recursive: true });
+
+// Local containers pre-install chromium at /opt/pw-browsers; CI installs
+// via `npx playwright install chromium` into the default registry, which
+// playwright-core resolves when no executablePath is given.
+const executablePath = process.env.CHROMIUM_PATH
+  || (existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined);
+const browser = await chromium.launch(executablePath ? { executablePath } : {});
 const context = await browser.newContext({
   timezoneId: 'America/Denver',
   viewport: { width: 900, height: 700 }
@@ -94,8 +104,9 @@ const inn1Pitcher = await page.textContent('.card:has(.card-title:text("Pitchers
 inn1Pitcher.includes('Inn 1') ? ok(`pitcher assigned for inning 1 (${inn1Pitcher.trim().replace(/\s+/g, ' ')})`) : fail('pitcher assignment did not stick');
 
 // 9. Save game, check history date display
-await page.once('dialog', d => d.accept());
 await page.click('text=Save Game');
+await page.waitForSelector('.toast:has-text("Game saved")');
+ok('save shows a toast (no native alert)');
 await page.click('.nav-tab:has-text("History")');
 await page.waitForSelector('text=Test Tigers');
 const historyText = await page.textContent('.player-item');
@@ -170,6 +181,54 @@ await page.click('.nav-tab:has-text("Settings")');
 await page.locator('.card:has-text("Display") .toggle-track').click(); // back to light
 ok('stats view renders in dark mode');
 
+// ============================================
+// Phase 5: data safety - backup, restore, history detail
+// ============================================
+await page.waitForSelector('text=Backup & Restore');
+const [download] = await Promise.all([
+  page.waitForEvent('download'),
+  page.click('text=Download Backup')
+]);
+const backupName = download.suggestedFilename();
+backupName.startsWith('diamond-lineup-backup-') && backupName.endsWith('.json')
+  ? ok(`backup downloads as ${backupName}`)
+  : fail(`backup filename: ${backupName}`);
+const backup = JSON.parse(readFileSync(await download.path(), 'utf8'));
+(backup.roster?.length === 12 && backup.games?.length === 1)
+  ? ok('backup contains the roster and saved game')
+  : fail(`backup shape: roster=${backup.roster?.length} games=${backup.games?.length}`);
+
+// Restore round-trip: modify the backup, import it, verify it went live
+backup.roster[0] = { ...backup.roster[0], name: 'Imported Kid' };
+const modPath = join(ARTIFACTS, 'modified-backup.json');
+writeFileSync(modPath, JSON.stringify(backup));
+await page.setInputFiles('input[type="file"]', modPath);
+await page.waitForSelector('.modal:has-text("Replace the data")');
+await Promise.all([
+  page.waitForEvent('load'), // the app reloads itself after import
+  page.click('.modal button:has-text("Restore")')
+]);
+await page.waitForSelector('.nav-title');
+await page.click('.nav-tab:has-text("Roster")');
+await page.waitForSelector('text=Imported Kid');
+ok('restore round-trip: imported data is live');
+
+// History: expandable game detail with read-only lineup
+await page.click('.nav-tab:has-text("History")');
+await page.locator('.player-item').first().click();
+await page.waitForSelector('button:has-text("Delete Game")');
+const snapshotCells = await page.locator('.lineup-grid .pos-text').count();
+snapshotCells >= 60
+  ? ok(`game detail shows the saved lineup (${snapshotCells} cells)`)
+  : fail(`snapshot cells: ${snapshotCells}`);
+
+// Delete asks for confirmation and can be cancelled
+await page.click('button:has-text("Delete Game")');
+await page.waitForSelector('.modal:has-text("Season stats will no longer include it")');
+await page.click('.modal button:has-text("Cancel")');
+await page.waitForSelector('button:has-text("Delete Game")');
+ok('game delete confirms and cancels cleanly');
+
 // 10. Persistence across reload
 await page.reload();
 await page.waitForSelector('.nav-title');
@@ -206,10 +265,13 @@ await fairnessCard.locator('select').nth(2).selectOption('1'); // max consecutiv
 await fairnessCard.locator('.toggle-track').click(); // everyone plays infield
 ok('fairness rules enabled (consecutive sits 1, everyone infield)');
 
-// Start a new softball game
+// Start a new softball game (discarding the current one requires confirmation)
 await page.click('.nav-tab:has-text("Game")');
 await page.waitForSelector('text=Start New Game');
 await page.click('text=Start New Game');
+await page.waitForSelector('.modal:has-text("Discard the current game")');
+ok('starting a new game asks before discarding the current one');
+await page.click('button:has-text("Discard & Start New")');
 await page.waitForSelector('text=Set Batting Order');
 await page.click('text=Start Blank');
 await page.waitForSelector('input[type="date"]');
