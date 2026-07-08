@@ -1,28 +1,30 @@
 /* ============================================
-   Youth Baseball Lineup - Feature Modals
+   Diamond Lineup - Feature Modals
    ============================================ */
+
+import React from 'react';
+import { POSITIONS, POSITION_LABELS, POSITION_TIERS } from '../domain/constants';
+import { newId } from '../domain/ids';
+import { Solver } from '../domain/solver';
+import { Storage } from '../services/storage';
+import { Alert, Checkbox, EmptyState, Modal, OptionItem, OptionList, PositionBadge } from './ui';
 
 // ============================================
 // Player Editor Modal
 // ============================================
-function PlayerEditorModal({ player, onSave, onClose }) {
+export function PlayerEditorModal({ player, positions = POSITIONS, onSave, onClose }) {
   const [name, setName] = React.useState(player?.name || '');
   const [canPitch, setCanPitch] = React.useState(player?.canPitch || false);
   const [prefersPitching, setPrefersPitching] = React.useState(player?.prefersPitching || false);
   const [canCatch, setCanCatch] = React.useState(player?.canCatch || false);
-  const [positions, setPositions] = React.useState(player?.positions || {});
+  const [positionTiers, setPositionTiers] = React.useState(() => {
+    const initial = {};
+    positions.forEach(pos => {
+      initial[pos] = player?.positions?.[pos] ?? POSITION_TIERS.CAN_PLAY;
+    });
+    return { ...player?.positions, ...initial };
+  });
   const [preferredOrder, setPreferredOrder] = React.useState(player?.preferredOrder || []);
-
-  // Initialize positions if empty
-  React.useEffect(() => {
-    if (Object.keys(positions).length === 0) {
-      const initial = {};
-      POSITIONS.forEach(pos => {
-        initial[pos] = POSITION_TIERS.CAN_PLAY;
-      });
-      setPositions(initial);
-    }
-  }, []);
 
   // Cycle position tier on tap
   const cyclePositionTier = (pos) => {
@@ -31,9 +33,9 @@ function PlayerEditorModal({ player, onSave, onClose }) {
       return;
     }
 
-    const currentTier = positions[pos] || POSITION_TIERS.CAN_PLAY;
+    const currentTier = positionTiers[pos] || POSITION_TIERS.CAN_PLAY;
     let newTier;
-    
+
     if (currentTier === POSITION_TIERS.CAN_PLAY) {
       newTier = POSITION_TIERS.PREFERRED;
     } else if (currentTier === POSITION_TIERS.PREFERRED) {
@@ -42,8 +44,7 @@ function PlayerEditorModal({ player, onSave, onClose }) {
       newTier = POSITION_TIERS.CAN_PLAY;
     }
 
-    const newPositions = { ...positions, [pos]: newTier };
-    setPositions(newPositions);
+    setPositionTiers({ ...positionTiers, [pos]: newTier });
 
     // Update preferred order
     if (newTier === POSITION_TIERS.PREFERRED && !preferredOrder.includes(pos)) {
@@ -61,11 +62,11 @@ function PlayerEditorModal({ player, onSave, onClose }) {
     if (!checked) {
       setPrefersPitching(false);
       // Set P to avoid if they can't pitch
-      setPositions({ ...positions, P: POSITION_TIERS.AVOID });
+      setPositionTiers({ ...positionTiers, P: POSITION_TIERS.AVOID });
       setPreferredOrder(preferredOrder.filter(p => p !== 'P'));
     } else {
       // Reset P to canPlay
-      setPositions({ ...positions, P: POSITION_TIERS.CAN_PLAY });
+      setPositionTiers({ ...positionTiers, P: POSITION_TIERS.CAN_PLAY });
     }
   };
 
@@ -74,11 +75,11 @@ function PlayerEditorModal({ player, onSave, onClose }) {
     setCanCatch(checked);
     if (!checked) {
       // Set C to avoid if they can't catch
-      setPositions({ ...positions, C: POSITION_TIERS.AVOID });
+      setPositionTiers({ ...positionTiers, C: POSITION_TIERS.AVOID });
       setPreferredOrder(preferredOrder.filter(p => p !== 'C'));
     } else {
       // Reset C to canPlay
-      setPositions({ ...positions, C: POSITION_TIERS.CAN_PLAY });
+      setPositionTiers({ ...positionTiers, C: POSITION_TIERS.CAN_PLAY });
     }
   };
 
@@ -86,12 +87,12 @@ function PlayerEditorModal({ player, onSave, onClose }) {
     if (!name.trim()) return;
 
     onSave({
-      id: player?.id || Date.now().toString(),
+      id: player?.id || newId(),
       name: name.trim(),
       canPitch,
       prefersPitching: canPitch && prefersPitching,
       canCatch,
-      positions,
+      positions: positionTiers,
       preferredOrder
     });
   };
@@ -153,8 +154,8 @@ function PlayerEditorModal({ player, onSave, onClose }) {
           Tap to cycle: Can Play → Preferred → Avoid
         </p>
         <div className="position-grid">
-          {POSITIONS.map(pos => {
-            const tier = positions[pos] || POSITION_TIERS.CAN_PLAY;
+          {positions.map(pos => {
+            const tier = positionTiers[pos] || POSITION_TIERS.CAN_PLAY;
             const isDisabled = (pos === 'P' && !canPitch) || (pos === 'C' && !canCatch);
             const prefIndex = preferredOrder.indexOf(pos);
 
@@ -163,6 +164,7 @@ function PlayerEditorModal({ player, onSave, onClose }) {
                 key={pos}
                 className={`position-option ${tier} ${isDisabled ? 'disabled' : ''}`}
                 onClick={() => cyclePositionTier(pos)}
+                title={POSITION_LABELS[pos]}
               >
                 {pos}
                 {prefIndex >= 0 && (
@@ -180,17 +182,17 @@ function PlayerEditorModal({ player, onSave, onClose }) {
 // ============================================
 // Pitcher Picker Modal
 // ============================================
-function PitcherPickerModal({ inning, players, currentPitcherId, gameDate, onSelect, onClose }) {
+export function PitcherPickerModal({ inning, players, currentPitcherId, gameDate, onSelect, onClose }) {
   // Group pitchers
   const primaryPitchers = [];
   const backupPitchers = [];
-  
+
   players.forEach(player => {
     if (!player.canPitch) return;
-    
+
     const eligibility = Storage.getPitcherEligibility(player.id, gameDate);
     const pitcherData = { player, eligibility };
-    
+
     if (player.prefersPitching) {
       primaryPitchers.push(pitcherData);
     } else {
@@ -200,7 +202,7 @@ function PitcherPickerModal({ inning, players, currentPitcherId, gameDate, onSel
 
   const renderPitcherOption = ({ player, eligibility }) => {
     const isSelected = player.id === currentPitcherId;
-    
+
     return (
       <div
         key={player.id}
@@ -254,11 +256,11 @@ function PitcherPickerModal({ inning, players, currentPitcherId, gameDate, onSel
 // ============================================
 // Position Picker Modal
 // ============================================
-function PositionPickerModal({ player, inning, currentPosition, lineup, totalInnings, onSelect, onClose }) {
+export function PositionPickerModal({ player, inning, currentPosition, lineup, totalInnings, positions = POSITIONS, requireContiguousPitching = true, onSelect, onClose }) {
   // Check if assigning pitcher would violate contiguity
   const checkPitchingContiguity = (pos) => {
-    if (pos !== 'P') return true;
-    
+    if (pos !== 'P' || !requireContiguousPitching) return true;
+
     // Find all innings where this player is already pitching
     const pitchingInnings = [];
     for (let i = 1; i <= totalInnings; i++) {
@@ -266,13 +268,13 @@ function PositionPickerModal({ player, inning, currentPosition, lineup, totalInn
         pitchingInnings.push(i);
       }
     }
-    
+
     if (pitchingInnings.length === 0) return true;
-    
+
     // Check if adding this inning would keep it contiguous
     const allInnings = [...pitchingInnings, inning].sort((a, b) => a - b);
     for (let i = 1; i < allInnings.length; i++) {
-      if (allInnings[i] - allInnings[i-1] !== 1) return false;
+      if (allInnings[i] - allInnings[i - 1] !== 1) return false;
     }
     return true;
   };
@@ -283,7 +285,7 @@ function PositionPickerModal({ player, inning, currentPosition, lineup, totalInn
         Select a new position:
       </p>
       <div className="position-grid">
-        {POSITIONS.map(pos => {
+        {positions.map(pos => {
           const canPlay = Solver.canPlayerPlayPosition(player, pos);
           const pitchingOk = checkPitchingContiguity(pos);
           const isDisabled = !canPlay || !pitchingOk;
@@ -296,7 +298,7 @@ function PositionPickerModal({ player, inning, currentPosition, lineup, totalInn
               className={`position-option ${tier} ${isDisabled ? 'disabled' : ''} ${isCurrentPosition ? 'selected' : ''}`}
               onClick={() => !isDisabled && onSelect(pos)}
               style={isCurrentPosition ? { borderColor: 'var(--accent)', borderWidth: '3px' } : {}}
-              title={!pitchingOk ? 'Would create non-consecutive pitching' : ''}
+              title={!pitchingOk ? 'Would create non-consecutive pitching' : POSITION_LABELS[pos]}
             >
               {pos}
               {pos === 'P' && !pitchingOk && <span style={{ fontSize: '10px', display: 'block' }}>gap</span>}
@@ -307,7 +309,7 @@ function PositionPickerModal({ player, inning, currentPosition, lineup, totalInn
         <div
           className={`position-option ${currentPosition === 'SIT' ? 'selected' : ''}`}
           onClick={() => onSelect('SIT')}
-          style={{ 
+          style={{
             background: 'var(--pos-sit)',
             ...(currentPosition === 'SIT' ? { borderColor: 'var(--accent)', borderWidth: '3px' } : {})
           }}
@@ -322,7 +324,7 @@ function PositionPickerModal({ player, inning, currentPosition, lineup, totalInn
 // ============================================
 // Cell Action Modal
 // ============================================
-function CellActionModal({ player, inning, position, isLocked, onAction, onClose }) {
+export function CellActionModal({ player, inning, position, isLocked, onAction, onClose }) {
   return (
     <Modal title={`${player.name} - Inning ${inning}`} onClose={onClose}>
       <div style={{ marginBottom: '16px' }}>
@@ -376,7 +378,7 @@ function CellActionModal({ player, inning, position, isLocked, onAction, onClose
 // ============================================
 // Pitch Counter Modal
 // ============================================
-function PitchCounterModal({ player, inning, pitchLog, onUpdate, onEndInning, onClose }) {
+export function PitchCounterModal({ player, inning, pitchLog, onUpdate, onEndInning, onClose }) {
   const currentInningPitches = pitchLog[inning] || 0;
   const totalPitches = Object.values(pitchLog).reduce((sum, count) => sum + count, 0);
 
@@ -402,16 +404,16 @@ function PitchCounterModal({ player, inning, pitchLog, onUpdate, onEndInning, on
         </div>
 
         <div className="pitch-counter-buttons">
-          <button 
-            className="pitch-btn-minus" 
+          <button
+            className="pitch-btn-minus"
             onClick={handleDecrement}
             disabled={currentInningPitches === 0}
             aria-label="Subtract one pitch"
           >
             −
           </button>
-          <button 
-            className="pitch-btn-plus" 
+          <button
+            className="pitch-btn-plus"
             onClick={handleIncrement}
             aria-label="Add one pitch"
           >
@@ -435,7 +437,7 @@ function PitchCounterModal({ player, inning, pitchLog, onUpdate, onEndInning, on
 // ============================================
 // Player Exit Modal
 // ============================================
-function PlayerExitModal({ player, inning, onConfirm, onClose }) {
+export function PlayerExitModal({ player, inning, onConfirm, onClose }) {
   return (
     <Modal title={`${player.name} Exiting`} onClose={onClose}>
       <p style={{ marginBottom: '16px' }}>
@@ -470,21 +472,21 @@ function PlayerExitModal({ player, inning, onConfirm, onClose }) {
 // ============================================
 // Displacement Resolution Modal
 // ============================================
-function DisplacementModal({ changes, onAccept, onUndo, onClose }) {
+export function DisplacementModal({ changes, onAccept, onUndo, onClose }) {
   return (
     <Modal title="Position Changes" onClose={onClose}>
       <p style={{ marginBottom: '16px' }}>
         The following changes will be made:
       </p>
-      
-      <div style={{ 
-        background: 'var(--bg-secondary)', 
-        borderRadius: 'var(--radius-md)', 
+
+      <div style={{
+        background: 'var(--bg-secondary)',
+        borderRadius: 'var(--radius-md)',
         padding: 'var(--space-md)',
         marginBottom: '16px'
       }}>
         {changes.map((change, idx) => (
-          <div key={idx} style={{ 
+          <div key={idx} style={{
             padding: '8px 0',
             borderBottom: idx < changes.length - 1 ? '1px solid var(--border-light)' : 'none'
           }}>
@@ -520,7 +522,7 @@ function DisplacementModal({ changes, onAccept, onUndo, onClose }) {
 // ============================================
 // Avoid Override Modal
 // ============================================
-function AvoidOverrideModal({ blockers, onOverride, onClose }) {
+export function AvoidOverrideModal({ blockers, onOverride, onClose }) {
   return (
     <Modal title="Cannot Create Lineup" onClose={onClose}>
       <Alert type="warning">
@@ -532,7 +534,7 @@ function AvoidOverrideModal({ blockers, onOverride, onClose }) {
       </p>
 
       <OptionList>
-        {blockers.map((blocker, idx) => (
+        {blockers.map((blocker) => (
           blocker.players.map(player => (
             <OptionItem
               key={`${player.id}-${blocker.position}`}
@@ -554,64 +556,63 @@ function AvoidOverrideModal({ blockers, onOverride, onClose }) {
 }
 
 // ============================================
-// Score Edit Popover
+// Sit Override Modal
+//
+// Shown when the solver can't keep everyone within the
+// max-sits-per-game setting (e.g., a big roster or a low
+// max). The coach explicitly allows extra bench innings
+// for this game. Previously this failure was silent - the
+// Fill button appeared to do nothing.
 // ============================================
-function ScoreEditPopover({ value, onChange, onClose }) {
-  const ref = React.useRef();
-  
-  React.useEffect(() => {
-    const handleClickOutside = (e) => {
-      // Small delay to prevent immediate close
-      setTimeout(() => {
-        if (ref.current && !ref.current.contains(e.target)) {
-          onClose();
-        }
-      }, 10);
-    };
-    // Use mouseup instead of mousedown to let the click complete
-    document.addEventListener('mouseup', handleClickOutside);
-    return () => document.removeEventListener('mouseup', handleClickOutside);
-  }, [onClose]);
-
-  // Stop propagation to prevent parent click handlers
-  const handleClick = (e) => {
-    e.stopPropagation();
-  };
-
+export function SitOverrideModal({ playersNeeded, maxSitsPerGame, onAllow, onClose }) {
   return (
-    <div 
-      ref={ref}
-      onClick={handleClick}
-      style={{
-        position: 'absolute',
-        top: '100%',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        zIndex: 1000,
-        background: 'var(--bg-primary)',
-        padding: '12px',
-        borderRadius: '10px',
-        boxShadow: '0 4px 20px rgba(0,0,0,0.2)',
-        marginTop: '4px',
-        minWidth: '120px'
-      }}
-    >
-      <Stepper value={value || 0} onChange={onChange} min={0} max={99} />
-      <button 
-        className="btn btn-sm btn-secondary" 
-        onClick={(e) => { e.stopPropagation(); onClose(); }}
-        style={{ width: '100%', marginTop: '8px' }}
-      >
-        Done
-      </button>
-    </div>
+    <Modal title="Sit Limit Reached" onClose={onClose}>
+      <Alert type="warning">
+        The lineup can't be completed without someone sitting more than{' '}
+        {maxSitsPerGame} {maxSitsPerGame === 1 ? 'inning' : 'innings'} this game.
+      </Alert>
+
+      <p style={{ margin: '16px 0' }}>
+        These players are at the limit. Allow extra sit innings to finish the lineup
+        (sits will still be spread as evenly as possible):
+      </p>
+
+      <div style={{
+        background: 'var(--bg-secondary)',
+        borderRadius: 'var(--radius-md)',
+        padding: 'var(--space-md)',
+        marginBottom: '16px'
+      }}>
+        {playersNeeded.map(p => (
+          <div key={p.id} style={{ padding: '4px 0' }}>
+            <strong>{p.name}</strong>
+            <span className="text-muted text-small" style={{ marginLeft: '8px' }}>
+              {p.currentSits} {p.currentSits === 1 ? 'sit' : 'sits'} so far
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: '8px' }}>
+        <button className="btn btn-secondary" onClick={onClose} style={{ flex: 1 }}>
+          Cancel
+        </button>
+        <button
+          className="btn btn-primary"
+          onClick={() => onAllow(playersNeeded.map(p => p.id))}
+          style={{ flex: 1 }}
+        >
+          Allow Extra Sits
+        </button>
+      </div>
+    </Modal>
   );
 }
 
 // ============================================
 // Game Start Options Modal
 // ============================================
-function GameStartOptionsModal({ hasDefaultOrder, hasLastGame, onSelect, onClose }) {
+export function GameStartOptionsModal({ hasDefaultOrder, hasLastGame, onSelect, onClose }) {
   return (
     <Modal title="Set Batting Order" onClose={onClose}>
       <OptionList>

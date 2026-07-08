@@ -1,18 +1,22 @@
 /* ============================================
-   Youth Baseball Lineup - Lineup Grid Component
+   Diamond Lineup - Lineup Grid Component
    ============================================ */
 
-function LineupGrid({ 
-  game, 
-  players, 
+import React from 'react';
+import { getPositionColorClass } from '../domain/constants';
+import { StatCard } from './ui';
+
+export function LineupGrid({
+  game,
   roster,
+  currentInning,
   onCellClick,
   onScoreChange
 }) {
   const [scoreEdit, setScoreEdit] = React.useState(null);
-  
+
   const innings = game?.innings || 7;
-  
+
   // Get all players in batting order (including exited - they show grayed out)
   const allPlayers = React.useMemo(() => {
     if (!game?.battingOrder) return [];
@@ -20,7 +24,7 @@ function LineupGrid({
       .map(id => roster.find(p => p.id === id))
       .filter(Boolean);
   }, [game?.battingOrder, roster]);
-  
+
   const exitedPlayers = game?.exitedPlayers || {};
 
   // Calculate which batting position each active player has
@@ -34,30 +38,68 @@ function LineupGrid({
   const usTotal = Object.values(game?.score?.us || {}).reduce((a, b) => a + b, 0);
   const themTotal = Object.values(game?.score?.them || {}).reduce((a, b) => a + b, 0);
 
-  const handleScoreClick = (team, inning) => {
-    setScoreEdit({ team, inning });
-  };
+  const renderScoreRow = (team, label, total) => (
+    <div className="score-row">
+      <span className="score-label">{label}</span>
+      <div className="score-cells">
+        {Array.from({ length: innings }, (_, i) => {
+          const inning = i + 1;
+          const value = game.score?.[team]?.[inning];
+          const isEditing = scoreEdit?.team === team && scoreEdit?.inning === inning;
 
-  const handleScoreUpdate = (value) => {
-    if (scoreEdit) {
-      onScoreChange(scoreEdit.team, scoreEdit.inning, value);
-    }
-  };
+          return (
+            <div
+              key={inning}
+              className={`score-cell ${isEditing ? 'editing' : ''}`}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (isEditing) {
+                  setScoreEdit(null);
+                } else {
+                  setScoreEdit({ team, inning });
+                }
+              }}
+              style={{ position: 'relative' }}
+            >
+              {isEditing ? (
+                <div className="score-edit">
+                  <button
+                    className="score-step-btn"
+                    onClick={(e) => { e.stopPropagation(); onScoreChange(team, inning, Math.max(0, (value || 0) - 1)); }}
+                    aria-label="Minus one run"
+                  >−</button>
+                  <span className="score-edit-value">{value || 0}</span>
+                  <button
+                    className="score-step-btn"
+                    onClick={(e) => { e.stopPropagation(); onScoreChange(team, inning, (value || 0) + 1); }}
+                    aria-label="Plus one run"
+                  >+</button>
+                </div>
+              ) : (
+                <span className="score-value">{value !== undefined ? value : ''}</span>
+              )}
+            </div>
+          );
+        })}
+        <div className="score-cell total"><span className="score-value">{total}</span></div>
+      </div>
+    </div>
+  );
 
   return (
     <div>
       {/* Lineup Grid */}
       <div className="lineup-wrapper">
-        <div 
+        <div
           className="lineup-grid"
-          style={{ 
-            gridTemplateColumns: `minmax(100px, auto) repeat(${innings}, minmax(52px, 1fr))` 
+          style={{
+            gridTemplateColumns: `minmax(100px, auto) repeat(${innings}, minmax(52px, 1fr))`
           }}
         >
           {/* Header Row */}
           <div className="lineup-cell header player-col">Batting</div>
           {Array.from({ length: innings }, (_, i) => (
-            <div key={i} className="lineup-cell header">
+            <div key={i} className={`lineup-cell header ${currentInning === i + 1 ? 'current' : ''}`}>
               {i + 1}
             </div>
           ))}
@@ -65,7 +107,7 @@ function LineupGrid({
           {/* Player Rows */}
           {allPlayers.map((player) => {
             if (!player) return null;
-            
+
             const playerId = player.id;
             const isExited = !!exitedPlayers[playerId];
             const exitedInning = exitedPlayers[playerId];
@@ -75,16 +117,16 @@ function LineupGrid({
               <React.Fragment key={playerId}>
                 {/* Player Name Cell */}
                 <div className={`lineup-cell player-col ${isExited ? 'exited' : ''}`}>
-                  <span style={{ 
-                    width: '24px', 
-                    fontSize: '12px', 
+                  <span style={{
+                    width: '24px',
+                    fontSize: '12px',
                     color: 'var(--text-secondary)',
                     textAlign: 'right',
                     flexShrink: 0
                   }}>
                     {battingPos}
                   </span>
-                  <span style={{ 
+                  <span style={{
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
@@ -107,7 +149,7 @@ function LineupGrid({
                   return (
                     <div
                       key={key}
-                      className={`lineup-cell ${isLocked ? 'locked' : ''} ${isEmpty ? 'empty-cell' : ''}`}
+                      className={`lineup-cell ${isLocked ? 'locked' : ''} ${isEmpty ? 'empty-cell' : ''} ${currentInning === inning ? 'current-col' : ''}`}
                       style={isAfterExit ? { background: 'var(--bg-tertiary)', color: 'var(--text-tertiary)' } : {}}
                       onClick={() => {
                         if (!isAfterExit) {
@@ -122,7 +164,7 @@ function LineupGrid({
                           {position}
                         </span>
                       ) : (
-                        <span style={{ color: 'var(--text-tertiary)', fontSize: '18px' }}>+</span>
+                        <span className="empty-plus">+</span>
                       )}
                     </div>
                   );
@@ -135,95 +177,8 @@ function LineupGrid({
 
       {/* Score Section */}
       <div className="score-section">
-        {/* Us Row */}
-        <div className="score-row">
-          <span className="score-label">Us</span>
-          <div className="score-cells">
-            {Array.from({ length: innings }, (_, i) => {
-              const inning = i + 1;
-              const value = game.score?.us?.[inning];
-              const isEditing = scoreEdit?.team === 'us' && scoreEdit?.inning === inning;
-
-              return (
-                <div
-                  key={inning}
-                  className={`score-cell ${isEditing ? 'editing' : ''}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (isEditing) {
-                      setScoreEdit(null);
-                    } else {
-                      setScoreEdit({ team: 'us', inning });
-                    }
-                  }}
-                  style={{ position: 'relative' }}
-                >
-                  {isEditing ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onScoreChange('us', inning, Math.max(0, (value || 0) - 1)); }}
-                        style={{ width: '20px', height: '24px', border: 'none', background: 'var(--bg-secondary)', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
-                      >−</button>
-                      <span style={{ minWidth: '20px', textAlign: 'center' }}>{value || 0}</span>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onScoreChange('us', inning, (value || 0) + 1); }}
-                        style={{ width: '20px', height: '24px', border: 'none', background: 'var(--bg-secondary)', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
-                      >+</button>
-                    </div>
-                  ) : (
-                    value !== undefined ? value : ''
-                  )}
-                </div>
-              );
-            })}
-            <div className="score-cell total">{usTotal}</div>
-          </div>
-        </div>
-
-        {/* Them Row */}
-        <div className="score-row">
-          <span className="score-label">Them</span>
-          <div className="score-cells">
-            {Array.from({ length: innings }, (_, i) => {
-              const inning = i + 1;
-              const value = game.score?.them?.[inning];
-              const isEditing = scoreEdit?.team === 'them' && scoreEdit?.inning === inning;
-
-              return (
-                <div
-                  key={inning}
-                  className={`score-cell ${isEditing ? 'editing' : ''}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (isEditing) {
-                      setScoreEdit(null);
-                    } else {
-                      setScoreEdit({ team: 'them', inning });
-                    }
-                  }}
-                  style={{ position: 'relative' }}
-                >
-                  {isEditing ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '2px' }}>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onScoreChange('them', inning, Math.max(0, (value || 0) - 1)); }}
-                        style={{ width: '20px', height: '24px', border: 'none', background: 'var(--bg-secondary)', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
-                      >−</button>
-                      <span style={{ minWidth: '20px', textAlign: 'center' }}>{value || 0}</span>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); onScoreChange('them', inning, (value || 0) + 1); }}
-                        style={{ width: '20px', height: '24px', border: 'none', background: 'var(--bg-secondary)', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
-                      >+</button>
-                    </div>
-                  ) : (
-                    value !== undefined ? value : ''
-                  )}
-                </div>
-              );
-            })}
-            <div className="score-cell total">{themTotal}</div>
-          </div>
-        </div>
+        {renderScoreRow('us', 'Us', usTotal)}
+        {renderScoreRow('them', 'Them', themTotal)}
       </div>
     </div>
   );
@@ -232,7 +187,7 @@ function LineupGrid({
 // ============================================
 // Lineup Stats Component
 // ============================================
-function LineupStats({ game, players }) {
+export function LineupStats({ game, players }) {
   const stats = React.useMemo(() => {
     if (!game?.lineup) return { playerCount: 0, innings: 0, maxSits: 0, sitGap: 0 };
 
@@ -278,7 +233,7 @@ function LineupStats({ game, players }) {
 // ============================================
 // Pitcher Assignments Row
 // ============================================
-function PitcherAssignments({ game, roster, onAssignClick }) {
+export function PitcherAssignments({ game, roster, onAssignClick }) {
   const innings = game?.innings || 7;
 
   return (
@@ -292,10 +247,10 @@ function PitcherAssignments({ game, roster, onAssignClick }) {
           <button
             key={inning}
             className={`btn ${pitcher ? 'btn-primary' : 'btn-secondary'}`}
-            style={{ 
-              minWidth: '75px', 
-              flexDirection: 'column', 
-              height: 'auto', 
+            style={{
+              minWidth: '75px',
+              flexDirection: 'column',
+              height: 'auto',
               padding: 'var(--space-sm)',
               gap: '2px'
             }}
@@ -315,7 +270,7 @@ function PitcherAssignments({ game, roster, onAssignClick }) {
 // ============================================
 // Inning Selector
 // ============================================
-function InningSelector({ currentInning, totalInnings, onChange, onAddInning }) {
+export function InningSelector({ currentInning, totalInnings, onChange, onAddInning }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)', flexWrap: 'wrap' }}>
       <span style={{ fontWeight: 500 }}>Current Inning:</span>

@@ -64,6 +64,15 @@
   
   /* Touch targets */
   --touch-min: 44px;
+
+  /* Chart palette - validated for CVD separation & contrast (light surface).
+     P/C/IF/OF are the same identities the lineup grid teaches. */
+  --chart-p: #C62828;
+  --chart-c: #1565C0;
+  --chart-if: #2E7D32;
+  --chart-of: #E65100;
+  --chart-sit: #AEAEB2;   /* deliberate neutral: bench = "nothing" */
+  --chart-accent: #007AFF;
 }
 
 /* Dark theme */
@@ -89,6 +98,12 @@
   --pos-infield: #253A28;
   --pos-outfield: #3A3525;
   --pos-sit: #2C2C2E;
+
+  /* Chart palette re-validated against the dark surface;
+     only the catcher blue needed a lighter step */
+  --chart-c: #1976D2;
+  --chart-sit: #636366;
+  --chart-accent: #409CFF;
 }
 
 /* --------------------------------------------
@@ -191,6 +206,11 @@ body {
 .nav-tab.active {
   background: var(--accent);
   color: white;
+}
+
+/* Icons only show in the mobile bottom bar */
+.nav-tab-icon {
+  display: none;
 }
 
 /* --------------------------------------------
@@ -670,12 +690,43 @@ body {
   background: var(--bg-secondary);
 }
 
+/* Player names stay pinned while innings scroll horizontally */
 .lineup-cell.player-col {
   justify-content: flex-start;
   padding-left: var(--space-md);
   min-width: 100px;
   font-weight: 500;
   gap: var(--space-sm);
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--bg-primary);
+  box-shadow: 1px 0 0 var(--border-light);
+}
+
+.lineup-cell.header.player-col {
+  z-index: 3;
+  background: var(--bg-secondary);
+}
+
+/* Current inning column highlight */
+.lineup-cell.header.current {
+  background: var(--accent);
+  color: white;
+}
+
+.lineup-cell.current-col {
+  background: var(--accent-light);
+}
+
+.lineup-cell.current-col:hover {
+  background: var(--accent-light);
+  filter: brightness(0.97);
+}
+
+.empty-plus {
+  color: var(--text-tertiary);
+  font-size: 18px;
 }
 
 .lineup-cell.locked::after {
@@ -718,6 +769,8 @@ body {
   align-items: center;
   gap: var(--space-sm);
   margin-bottom: var(--space-sm);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .score-row:last-child {
@@ -771,6 +824,43 @@ body {
 
 .score-cell.total:hover {
   background: var(--bg-secondary);
+}
+
+/* Inline score editor: real touch targets */
+.score-cell.editing {
+  width: auto;
+  min-width: 110px;
+  z-index: 5;
+}
+
+.score-edit {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.score-step-btn {
+  width: 34px;
+  height: 34px;
+  border: none;
+  background: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 18px;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.score-step-btn:active {
+  background: var(--bg-tertiary);
+}
+
+.score-edit-value {
+  min-width: 24px;
+  text-align: center;
 }
 
 /* --------------------------------------------
@@ -1198,6 +1288,241 @@ body {
 }
 
 /* --------------------------------------------
+   Season Stats Charts
+   Mark specs: bars <= 24px thick, 4px rounded data-end,
+   2px surface gaps between fills, text wears text tokens.
+   -------------------------------------------- */
+.chart-area {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.hbar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.hbar-label {
+  width: 84px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-align: right;
+}
+
+.hbar-track {
+  flex: 1;
+  display: flex;
+  gap: 2px; /* the surface gap separates touching segments */
+  height: 16px;
+  align-items: stretch;
+}
+
+.hbar-seg {
+  min-width: 3px;
+  cursor: pointer;
+}
+
+/* square at the baseline (left), 4px rounded at the data end */
+.hbar-track .hbar-seg:last-child {
+  border-radius: 0 4px 4px 0;
+}
+
+.hbar-seg.single {
+  background: var(--chart-accent);
+  border-radius: 0 4px 4px 0;
+}
+
+.hbar-value {
+  width: 28px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid var(--border-light);
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.chart-tooltip {
+  position: absolute;
+  z-index: 50;
+  transform: translateY(-110%);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-sm) var(--space-md);
+  font-size: 12px;
+  color: var(--text-secondary);
+  pointer-events: none;
+  min-width: 130px;
+}
+
+.chart-tooltip-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+/* Pitcher workload: per-game columns */
+.workload-row {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-lg);
+  padding: var(--space-sm) 0;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.workload-row:last-child {
+  border-bottom: none;
+}
+
+.workload-info {
+  width: 168px;
+  flex-shrink: 0;
+}
+
+.workload-name {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.workload-plot {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  border-bottom: 1px solid var(--border-light); /* recessive hairline baseline */
+}
+
+.workload-col {
+  width: 14px;
+  max-width: 24px;
+  background: var(--chart-accent);
+  border-radius: 4px 4px 0 0; /* rounded data-end, square at baseline */
+  cursor: pointer;
+}
+
+.workload-maxline {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px solid var(--danger);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Table-view twins */
+.stats-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.stats-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--text-secondary);
+  padding: var(--space-sm);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.stats-table td {
+  padding: var(--space-sm);
+  border-bottom: 1px solid var(--border-light);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+@media (max-width: 640px) {
+  .hbar-label {
+    width: 64px;
+    font-size: 12px;
+  }
+
+  .workload-info {
+    width: 120px;
+  }
+}
+
+/* --------------------------------------------
+   Toasts
+   -------------------------------------------- */
+.toast-stack {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(var(--space-lg) + env(safe-area-inset-bottom, 0px));
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-sm);
+  pointer-events: none;
+}
+
+.toast {
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  padding: var(--space-md) var(--space-xl);
+  border-radius: var(--radius-lg);
+  font-size: 15px;
+  font-weight: 500;
+  box-shadow: var(--shadow-lg);
+  animation: toast-in 0.2s ease-out;
+  max-width: min(90vw, 420px);
+  text-align: center;
+}
+
+.toast-error {
+  background: var(--danger);
+  color: white;
+}
+
+@keyframes toast-in {
+  from { transform: translateY(8px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+@media (max-width: 640px) {
+  /* Clear the bottom tab bar */
+  .toast-stack {
+    bottom: calc(84px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* --------------------------------------------
    Utility Classes
    -------------------------------------------- */
 .text-center { text-align: center; }
@@ -1228,6 +1553,12 @@ body {
   @page {
     size: landscape;
     margin: 0.5in;
+  }
+
+  /* Paper doesn't animate; also keeps print rendering deterministic */
+  *, *::before, *::after {
+    transition: none !important;
+    animation: none !important;
   }
   
   body {
@@ -1305,7 +1636,41 @@ body {
   .score-cell.total {
     background: #eee !important;
   }
-  
+
+  /* Score boxes print empty, for pencil scoring in the dugout */
+  .score-value {
+    visibility: hidden;
+  }
+
+  /* Unfilled cells print blank, not with a '+' tap hint */
+  .empty-plus {
+    visibility: hidden;
+  }
+
+  /* Full-width grid; no sticky/highlight artifacts on paper */
+  .lineup-grid {
+    width: 100%;
+  }
+
+  .lineup-cell.player-col {
+    position: static;
+    box-shadow: none;
+  }
+
+  .lineup-cell.current-col {
+    background: white !important;
+  }
+
+  .lineup-cell.header.current {
+    background: #f5f5f5 !important;
+    color: black !important;
+  }
+
+  /* Locked-cell border is on-screen guidance, not lineup information */
+  .lineup-cell.locked::after {
+    display: none;
+  }
+
   /* Position colors for print */
   .pos-text.P { color: #c00 !important; }
   .pos-text.C { color: #006 !important; }
@@ -1335,45 +1700,122 @@ body {
   }
 }
 
-@media (max-width: 480px) {
+/* --------------------------------------------
+   Mobile Layout (dugout mode)
+   -------------------------------------------- */
+@media (max-width: 640px) {
+  /* Bottom tab bar: thumb-reachable navigation */
+  .nav-tabs {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 200;
+    background: var(--bg-primary);
+    border-top: 1px solid var(--border-light);
+    padding: var(--space-xs) var(--space-sm);
+    padding-bottom: calc(var(--space-xs) + env(safe-area-inset-bottom, 0px));
+    display: flex;
+    justify-content: space-around;
+    gap: 0;
+    overflow: visible;
+  }
+
+  .nav-tab {
+    flex: 1;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    padding: var(--space-xs);
+    min-height: 52px;
+    font-size: 10px;
+    border-radius: var(--radius-md);
+  }
+
+  .nav-tab-icon {
+    display: block;
+    font-size: 20px;
+    line-height: 1.1;
+  }
+
+  .nav-tab.active {
+    background: var(--accent-light);
+    color: var(--accent);
+  }
+
+  [data-theme="dark"] .nav-tab.active {
+    color: white;
+  }
+
+  /* Keep content clear of the bottom bar */
+  .main {
+    padding: var(--space-md);
+    padding-bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+  }
+
   .nav-title {
     font-size: 15px;
   }
-  
-  .nav-tab {
-    padding: var(--space-sm);
-    font-size: 12px;
-  }
-  
-  .main {
-    padding: var(--space-md);
-  }
-  
+
   .card-body {
     padding: var(--space-md);
   }
-  
+
   .lineup-cell {
-    min-width: 44px;
+    min-width: 46px;
     font-size: 14px;
   }
-  
+
   .lineup-cell.player-col {
-    min-width: 80px;
+    min-width: 92px;
+    max-width: 130px;
     font-size: 13px;
   }
-  
+
   .stats-grid {
-    grid-template-columns: repeat(2, 1fr);
+    grid-template-columns: repeat(4, 1fr);
   }
-  
+
+  .stat-value {
+    font-size: 20px;
+  }
+
+  .stat-label {
+    font-size: 9px;
+  }
+
   .pitch-counter-display {
-    font-size: 56px;
+    font-size: 64px;
   }
-  
-  .pitch-btn-plus {
-    width: 72px;
-    height: 72px;
-    font-size: 28px;
+
+  /* Bottom-sheet modals: slide up from the bottom, full width */
+  .modal-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal {
+    max-width: 100%;
+    max-height: 92dvh;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    animation: sheet-up 0.25s ease-out;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  /* Action buttons spread evenly and stay tappable */
+  .card .btn {
+    flex: 1 1 auto;
+  }
+}
+
+@keyframes sheet-up {
+  from { transform: translateY(40%); opacity: 0.6; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+/* Hide the desktop title bar entirely on very short landscape phones */
+@media (orientation: landscape) and (max-height: 440px) {
+  .nav-content .nav-title {
+    display: none;
   }
 }
