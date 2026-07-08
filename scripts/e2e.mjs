@@ -214,6 +214,11 @@ ok('stats view renders in dark mode');
 // ============================================
 // Phase 5: data safety - backup, restore, history detail
 // ============================================
+// Account & Sync card renders signed-out; the app never requires an account
+await page.waitForSelector('text=Account & Sync');
+const signInVisible = await page.locator('.card:has-text("Account & Sync") button:has-text("Sign In")').isVisible();
+signInVisible ? ok('account card offers sign-in; app runs fully signed-out') : fail('sign-in UI missing');
+
 await page.waitForSelector('text=Backup & Restore');
 const [download] = await Promise.all([
   page.waitForEvent('download'),

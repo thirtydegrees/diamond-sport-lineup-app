@@ -7,6 +7,7 @@ import { todayISO } from '../domain/dates';
 import { AppContext } from '../state/AppContext';
 import { Storage } from '../services/storage';
 import { CUSTOM_PRESET_ID, getPreset, getPresetsForSport } from '../domain/presets';
+import { AccountCard } from '../components/AccountCard';
 import { ConfirmDialog, Toggle } from '../components/ui';
 
 export function SettingsView() {
@@ -149,6 +150,9 @@ export function SettingsView() {
 
   return (
     <div>
+      {/* Account & Sync */}
+      <AccountCard />
+
       {/* Sport & Field */}
       <div className="card">
         <div className="card-header">

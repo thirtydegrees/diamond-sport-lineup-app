@@ -30,6 +30,35 @@ restores it on another device — the manual laptop↔phone bridge until sync.
 CI (GitHub Actions) runs the type-check, build, unit tests, and the full
 browser E2E suite on every push.
 
+## Cloud sync setup (one time)
+
+The app is local-first and fully usable without an account. Sync uses
+Supabase (Settings → Account & Sync):
+
+1. **Create the database schema**: in the Supabase dashboard open
+   *SQL Editor → New query*, paste the contents of
+   `supabase/migrations/0001_init.sql`, and click **Run**. This creates the
+   `teams` / `team_members` / `team_data` tables with row-level security so
+   each account can only read its own team's data.
+2. **(Recommended for beta)** *Authentication → Sign In / Providers → Email*:
+   turn **off** "Confirm email" so coaches can sign in immediately after
+   creating an account.
+3. The app ships with the project URL and publishable key baked in (safe:
+   access control is enforced server-side by RLS). To point at a different
+   Supabase project, set `VITE_SUPABASE_URL` and
+   `VITE_SUPABASE_PUBLISHABLE_KEY` at build time.
+
+Sync model: last-write-wins per storage key. An empty account is seeded by
+the first device that signs in; a device signing in for the first time
+adopts the account's data; after that, whichever side changed most recently
+wins. Changes push automatically (debounced) and every app launch pulls.
+
+## Deploying (Vercel)
+
+Import the GitHub repo in Vercel; it auto-detects Vite (build
+`npm run build`, output `dist/`). No environment variables are required.
+Vercel deploys the repo's production branch (`main`) on every push.
+
 ## Architecture
 
 ```
@@ -83,9 +112,9 @@ the *previous day* in US timezones.
 - [x] **Phase 1** – Generalized rules engine: sport config (baseball/softball,
       9 or 10 fielders), league pitch-rule presets + custom rules
       (pitch-count and innings-based), toggleable fairness rules
-- [ ] **Phase 2** – Accounts + cloud sync (Supabase): set the lineup on a
-      laptop, run the game from a phone; teams/seasons data model ready for
-      assistant-coach collaboration
+- [x] **Phase 2** – Accounts + cloud sync (Supabase): local-first with
+      debounced push, last-write-wins pull, and a teams/members schema
+      ready for assistant-coach sharing
 - [x] **Phase 3** – Mobile UX overhaul (bottom tab bar, touch drag-to-reorder,
       sticky lineup columns, bottom-sheet modals, PWA install/offline) +
       print polish
