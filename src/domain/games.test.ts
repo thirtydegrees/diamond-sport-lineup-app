@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  deleteOutAt,
+  editOutAssignments,
+  insertOutAfter,
   applyLiveSwap,
   applyPlanSwap,
   completeGame,
@@ -264,5 +267,85 @@ describe('applyPlanSwap (H10)', () => {
     const g = plannedGame();
     const broken: Game = { ...g, lineup: { ...g.lineup, 'b-1': 'P' } }; // a AND b at P
     expect(validateGamePlan(broken).some(i => i.includes('2 players at P'))).toBe(true);
+  });
+});
+
+describe('completion contract enforcement (domain-level)', () => {
+  it('completeGame throws when a pitcher has no reviewed confirmation', () => {
+    let g = startLiveGame(plannedGame());
+    g = endInningOuts(g); // player a pitched inning 1
+    expect(() => completeGame(g, [], roster)).toThrow(/without a reviewed pitch count/);
+    // Partial confirmation lists are rejected the same way
+    let g2 = startLiveGame(plannedGame());
+    g2 = setInningPitches(g2, 'x-counter-only', 1, 4);
+    g2 = endInningOuts(g2);
+    expect(() => completeGame(g2, [{ playerId: 'a', pitches: 10 }], roster)).toThrow();
+    // The full list completes fine
+    expect(
+      completeGame(g2, [
+        { playerId: 'a', pitches: 10 },
+        { playerId: 'x-counter-only', pitches: 4 }
+      ], roster).status
+    ).toBe('completed');
+  });
+});
+
+describe('participation corrections (out ledger editor)', () => {
+  function completedTwoInnings(): Game {
+    let g = startLiveGame(plannedGame());
+    g = endInningOuts(g);
+    g = endInningOuts(g);
+    return completeGame(g, [{ playerId: 'a', pitches: 20 }, { playerId: 'j', pitches: 15 }], roster);
+  }
+
+  it('editOutAssignments replaces one snapshot and clears its estimated flag', () => {
+    const g = completedTwoInnings();
+    const fixed = editOutAssignments(g, 2, { ...g.outs[1].assignments, a: '1B', c: 'P' });
+    expect(fixed.outs[1].assignments.a).toBe('1B');
+    expect(fixed.outs[1].assignments.c).toBe('P');
+    expect(fixed.outs[0].assignments.a).toBe('P'); // neighbors untouched
+    // Derived pitching outs follow the correction
+    expect(pitchingOutsByPlayer(fixed).a).toBe(2);
+    expect(pitchingOutsByPlayer(fixed).c).toBe(1);
+  });
+
+  it('insertOutAfter adds a missed out and renumbers into 3-out innings', () => {
+    const g = completedTwoInnings();
+    const withInsert = insertOutAfter(g, 3);
+    expect(withInsert.outs).toHaveLength(7);
+    expect(withInsert.outs.map(o => o.seq)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+    expect(withInsert.outs[3].inning).toBe(2);
+    expect(withInsert.outs[3].outInInning).toBe(1);
+    // The inserted out clones the adjacent formation for easy correction
+    expect(withInsert.outs[3].assignments).toEqual(g.outs[2].assignments);
+  });
+
+  it('deleteOutAt removes an out and shifts the ledger up', () => {
+    const g = completedTwoInnings();
+    const without = deleteOutAt(g, 1);
+    expect(without.outs).toHaveLength(5);
+    expect(without.outs[0].seq).toBe(1);
+    // a pitched inning 1 (3 outs) originally; now 2 outs remain in inning 1
+    expect(pitchingOutsByPlayer(without).a).toBe(2);
+  });
+});
+
+describe('exit interactions with undo (formation hygiene)', () => {
+  it('undoOut does not resurrect a player who exited after the out', () => {
+    let g = startLiveGame(plannedGame());
+    g = recordOut(g);
+    // player d exits during inning 1
+    g = { ...g, exitedPlayers: { d: 1 } };
+    const assignments = { ...g.live!.assignments };
+    delete assignments.d;
+    g = { ...g, live: { ...g.live!, assignments } };
+    g = undoOut(g);
+    expect(g.live?.assignments.d).toBeUndefined();
+    expect(g.outs).toHaveLength(0);
+  });
+
+  it('validateFormation flags exited players still in the formation', () => {
+    const issues = validateFormation({ a: 'P', gone: 'C' }, ['a'], 9);
+    expect(issues.some(i => i.type === 'inactive')).toBe(true);
   });
 });

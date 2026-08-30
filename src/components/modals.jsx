@@ -521,34 +521,55 @@ export function PitchCounterModal({ player, inning, entry, dailyMax, dailyTotal,
 // ============================================
 // Complete Game - pitch confirmation
 //
-// A player who actually pitched must have a confirmed final
-// count (or be explicitly marked unknown - never silently zero)
-// before the game becomes authoritative for eligibility.
+// Every pitcher must be EXPLICITLY reviewed: the coach either
+// confirms a number (the working count is offered, but an
+// untouched prefill is never accepted as confirmation) or
+// declares - through a second acknowledgment - that no
+// trustworthy count can be established. A zero for a player who
+// actually pitched also requires the second acknowledgment,
+// because an accidental confirmed zero looks authoritative and
+// unlocks eligibility a real count might not.
 // ============================================
 export function CompleteGameModal({ rows, hasOuts, onComplete, onClose }) {
   // rows: [{ playerId, name, pitchingOuts, workingCount }]
   const [values, setValues] = React.useState(() => {
     const v = {};
-    rows.forEach(r => { v[r.playerId] = { text: String(r.workingCount), unknown: false }; });
+    rows.forEach(r => {
+      v[r.playerId] = { text: String(r.workingCount), resolved: null }; // resolved: null | 'confirmed' | 'unknown'
+    });
     return v;
   });
+  const [ackPrompt, setAckPrompt] = React.useState(null); // { row, kind: 'zero' | 'unknown' }
 
   const setRow = (id, patch) => setValues(prev => ({ ...prev, [id]: { ...prev[id], ...patch } }));
 
-  const invalid = rows.some(r => {
-    const v = values[r.playerId];
-    if (v.unknown) return false;
+  const parseCount = (v) => {
     const n = parseInt(v.text, 10);
-    return !Number.isFinite(n) || n < 0;
-  });
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  };
+
+  const handleConfirmRow = (row) => {
+    const v = values[row.playerId];
+    const n = parseCount(v);
+    if (n === null) return;
+    if (n === 0 && row.pitchingOuts > 0) {
+      // Confirming 0 for a player who actually pitched is unusual - make
+      // sure it is a decision, not an untouched default
+      setAckPrompt({ row, kind: 'zero' });
+      return;
+    }
+    setRow(row.playerId, { resolved: 'confirmed' });
+  };
+
+  const allResolved = rows.every(r => values[r.playerId].resolved !== null);
 
   const handleComplete = () => {
-    if (invalid) return;
+    if (!allResolved) return;
     onComplete(rows.map(r => {
       const v = values[r.playerId];
       return {
         playerId: r.playerId,
-        pitches: v.unknown ? null : parseInt(v.text, 10)
+        pitches: v.resolved === 'unknown' ? null : parseCount(v)
       };
     }));
   };
@@ -560,8 +581,10 @@ export function CompleteGameModal({ rows, hasOuts, onComplete, onClose }) {
       footer={
         <>
           <button className="btn btn-secondary" onClick={onClose}>Not Yet</button>
-          <button className="btn btn-primary" onClick={handleComplete} disabled={invalid}>
-            ✓ Confirm & Complete
+          <button className="btn btn-primary" onClick={handleComplete} disabled={!allResolved}>
+            {allResolved
+              ? '✓ Complete Game'
+              : `Review ${rows.filter(r => values[r.playerId].resolved === null).length} pitch count${rows.filter(r => values[r.playerId].resolved === null).length === 1 ? '' : 's'} first`}
           </button>
         </>
       }
@@ -577,59 +600,114 @@ export function CompleteGameModal({ rows, hasOuts, onComplete, onClose }) {
       {rows.length > 0 ? (
         <>
           <p className="text-small" style={{ marginBottom: '12px' }}>
-            Review the final pitch count for everyone who pitched. Correct any
-            total the in-game counter missed (e.g. against the official book),
-            or mark it unknown if you can't establish it.
+            Set the final pitch count for everyone who pitched - check it
+            against the official book if you have one. Each pitcher needs an
+            explicit ✓ before the game can complete.
           </p>
           {rows.map(r => {
             const v = values[r.playerId];
+            const n = parseCount(v);
             return (
               <div
                 key={r.playerId}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: '10px',
+                  display: 'flex', alignItems: 'center', gap: '8px',
                   padding: '10px 0', borderBottom: '1px solid var(--border-light)'
                 }}
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600 }}>{r.name}</div>
+                  <div style={{ fontWeight: 600 }}>
+                    {r.name}
+                    {v.resolved === 'confirmed' && <span style={{ color: 'var(--success)', marginLeft: '6px' }}>✓ {n}</span>}
+                    {v.resolved === 'unknown' && <span style={{ color: 'var(--warning)', marginLeft: '6px' }}>⚠ no count</span>}
+                  </div>
                   <div className="text-muted text-small">
                     {r.pitchingOuts > 0
-                      ? `Pitched ${formatOutsAsInnings(r.pitchingOuts)} inning${r.pitchingOuts === 3 ? '' : 's'} (${r.pitchingOuts} out${r.pitchingOuts === 1 ? '' : 's'})`
+                      ? `Pitched ${formatOutsAsInnings(r.pitchingOuts)} inning${r.pitchingOuts === 3 ? '' : 's'}`
                       : 'Counter used, no pitching outs recorded'}
+                    {r.workingCount === 0 && r.pitchingOuts > 0 && v.resolved === null && (
+                      <span style={{ color: 'var(--warning)' }}> · no pitches were counted</span>
+                    )}
                   </div>
                 </div>
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  className="form-input"
-                  style={{ width: '76px', textAlign: 'center' }}
-                  value={v.unknown ? '' : v.text}
-                  disabled={v.unknown}
-                  min={0}
-                  onChange={(e) => setRow(r.playerId, { text: e.target.value })}
-                  aria-label={`Final pitches for ${r.name}`}
-                />
-                <label className="checkbox" style={{ whiteSpace: 'nowrap' }}>
-                  <input
-                    type="checkbox"
-                    className="checkbox-input"
-                    checked={v.unknown}
-                    onChange={(e) => setRow(r.playerId, { unknown: e.target.checked })}
-                  />
-                  <span className="checkbox-label text-small">Unknown</span>
-                </label>
+                {v.resolved === null ? (
+                  <>
+                    <input
+                      type="number"
+                      inputMode="numeric"
+                      className="form-input"
+                      style={{ width: '70px', textAlign: 'center' }}
+                      value={v.text}
+                      min={0}
+                      onChange={(e) => setRow(r.playerId, { text: e.target.value })}
+                      aria-label={`Final pitches for ${r.name}`}
+                    />
+                    <button
+                      className="btn btn-sm btn-primary"
+                      disabled={n === null}
+                      onClick={() => handleConfirmRow(r)}
+                    >
+                      Confirm
+                    </button>
+                    <button
+                      className="btn btn-sm btn-ghost"
+                      title="No trustworthy count can be established"
+                      onClick={() => setAckPrompt({ row: r, kind: 'unknown' })}
+                    >
+                      ?
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="btn btn-sm btn-secondary"
+                    onClick={() => setRow(r.playerId, { resolved: null })}
+                  >
+                    Edit
+                  </button>
+                )}
               </div>
             );
           })}
-          <p className="form-hint" style={{ marginTop: '10px' }}>
-            An unknown count is never treated as zero - the pitcher shows as
-            "count needed" and gets the most conservative rest until you fix it
-            in History.
-          </p>
         </>
       ) : (
         <p className="text-small">No pitching was recorded in this game.</p>
+      )}
+
+      {ackPrompt && (
+        <Modal title={ackPrompt.kind === 'zero' ? 'Confirm Zero Pitches?' : 'No Count Available?'} onClose={() => setAckPrompt(null)}>
+          {ackPrompt.kind === 'zero' ? (
+            <p className="text-small" style={{ marginBottom: '16px' }}>
+              {ackPrompt.row.name} pitched {formatOutsAsInnings(ackPrompt.row.pitchingOuts)} inning
+              {ackPrompt.row.pitchingOuts === 3 ? '' : 's'} but the count is 0. Confirm only if
+              they truly threw no pitches. If you just didn't count, use
+              "no count" instead - a wrong zero makes them look fully rested.
+            </p>
+          ) : (
+            <p className="text-small" style={{ marginBottom: '16px' }}>
+              Use this only when no trustworthy total exists (no counter, no
+              book, no scorer). {ackPrompt.row.name} will be treated as needing
+              the <strong>maximum rest</strong> your rules allow until you enter
+              a real count in History.
+            </p>
+          )}
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setAckPrompt(null)}>
+              Back
+            </button>
+            <button
+              className={`btn ${ackPrompt.kind === 'zero' ? 'btn-primary' : 'btn-danger'}`}
+              style={{ flex: 1 }}
+              onClick={() => {
+                setRow(ackPrompt.row.playerId, {
+                  resolved: ackPrompt.kind === 'zero' ? 'confirmed' : 'unknown'
+                });
+                setAckPrompt(null);
+              }}
+            >
+              {ackPrompt.kind === 'zero' ? 'Yes, exactly 0 pitches' : 'I understand - no count'}
+            </button>
+          </div>
+        </Modal>
       )}
     </Modal>
   );

@@ -37,7 +37,12 @@ import {
   activePlayerIdsAt,
   OUTS_PER_INNING
 } from '../domain/games';
-import { assessPitcherAssignment, dailyPitchTotal } from '../domain/pitching';
+import {
+  assessPitcherAssignment,
+  assessPositionChange,
+  capCrossingWarnings,
+  dailyPitchTotal
+} from '../domain/pitching';
 import { Solver } from '../domain/solver';
 import { AppContext } from '../state/AppContext';
 import {
@@ -83,6 +88,9 @@ export function LineupView({ onBack, onGameCompleted }) {
   const [outIssuesPrompt, setOutIssuesPrompt] = React.useState(null); // { issues, bulk }
   const [completeModal, setCompleteModal] = React.useState(false);
   const [startIssuesPrompt, setStartIssuesPrompt] = React.useState(null);
+  const [capPrompt, setCapPrompt] = React.useState(null); // { warnings, bulk, pitcherId }
+  const [liveOverridePrompt, setLiveOverridePrompt] = React.useState(null); // { warnings, apply }
+  const [planOverridePrompt, setPlanOverridePrompt] = React.useState(null); // { warnings, proceed }
 
   const isLive = game?.status === 'live';
   const innings = game?.innings || settings.innings;
@@ -219,7 +227,11 @@ export function LineupView({ onBack, onGameCompleted }) {
     }
   };
 
-  const handleRecordOut = (bulk = false) => {
+  // One acknowledgment per pitcher per game: after the coach knowingly
+  // continues past a workload boundary, don't nag on every subsequent out
+  const capAcks = React.useRef(new Set());
+
+  const proceedRecordOut = (bulk) => {
     const issues = validateFormation(
       game.live.assignments,
       activePlayerIdsAt(game, game.live.inning),
@@ -234,39 +246,87 @@ export function LineupView({ onBack, onGameCompleted }) {
     doRecordOut(bulk);
   };
 
+  const handleRecordOut = (bulk = false) => {
+    // Continuation checkpoint: leaving the same pitcher on the mound is a
+    // decision too - warn once when this out crosses a workload boundary
+    const livePitcher = Object.keys(game.live.assignments).find(
+      id => game.live.assignments[id] === 'P'
+    );
+    if (livePitcher && !capAcks.current.has(livePitcher)) {
+      const remaining = bulk ? OUTS_PER_INNING - game.live.outsRecorded : 1;
+      const capWarnings = capCrossingWarnings(game, games, settings.pitchRules, remaining);
+      if (capWarnings.length > 0) {
+        setCapPrompt({ warnings: capWarnings, bulk, pitcherId: livePitcher });
+        return;
+      }
+    }
+    proceedRecordOut(bulk);
+  };
+
   const handleUndoOut = () => {
     if ((game.outs || []).length === 0) return;
     setGame(undoOut(game));
   };
 
-  /** Warnings for putting `player` at `position` in the LIVE formation. */
-  const liveWarningsFor = React.useCallback((position) => (player) => {
-    if (position !== 'P') {
-      const tier = player.positions?.[position];
-      if (position === 'C' && !player.canCatch) {
-        return [{ severity: 'warn', short: 'Not a catcher', message: `${player.name} is not marked as able to catch.` }];
+  /** Warnings for putting `player` at `position` in the LIVE formation -
+      the same central policy as every other assignment path (H6). */
+  const liveWarningsFor = React.useCallback((position) => (player) =>
+    assessPositionChange(player, position, game, games, settings.pitchRules, {
+      enforcePitcherCatcherRule: !isSoftball,
+      live: true
+    }), [game, games, settings.pitchRules, isSoftball]);
+
+  /** Apply a live swap, checking the DISPLACED player's new spot too. */
+  const attemptLiveSwap = (playerId, position) => {
+    const holderId = position !== 'SIT'
+      ? Object.keys(game.live.assignments).find(
+          id => id !== playerId && game.live.assignments[id] === position
+        )
+      : null;
+    if (holderId) {
+      const holder = roster.find(p => p.id === holderId);
+      const holderNewPos = game.live.assignments[playerId] ?? 'SIT';
+      const displacedWarnings = holder
+        ? assessPositionChange(holder, holderNewPos, game, games, settings.pitchRules, {
+            enforcePitcherCatcherRule: !isSoftball,
+            live: true
+          })
+        : [];
+      if (displacedWarnings.length > 0) {
+        setLiveOverridePrompt({
+          warnings: displacedWarnings,
+          apply: () => setGame(applyLiveSwap(game, playerId, position))
+        });
+        return;
       }
-      if (tier === 'avoid') {
-        return [{ severity: 'warn', short: 'Avoided position', message: `${player.name} has ${position} marked as Avoid.` }];
-      }
-      return [];
     }
-    const decision = assessPitcher(player);
-    // Live tracking records reality: even "can't pitch" downgrades to a
-    // warning here, because if the kid is on the mound, the kid pitched.
-    return decision.warnings.map(w => ({ ...w, severity: 'warn' }));
-  }, [assessPitcher]);
+    setGame(applyLiveSwap(game, playerId, position));
+  };
 
   const handleLiveSpotSelect = (playerId) => {
     const { position } = liveSpotModal;
     setLiveSpotModal(null);
-    setGame(applyLiveSwap(game, playerId, position));
+    attemptLiveSwap(playerId, position);
   };
 
+  // Bench player coming in: same policy gate as every other path
   const handleBenchMove = (position) => {
     const { playerId } = benchMoveModal;
+    const player = roster.find(p => p.id === playerId);
     setBenchMoveModal(null);
-    setGame(applyLiveSwap(game, playerId, position));
+    if (!player) return;
+    const warnings = assessPositionChange(player, position, game, games, settings.pitchRules, {
+      enforcePitcherCatcherRule: !isSoftball,
+      live: true
+    });
+    if (warnings.length > 0) {
+      setLiveOverridePrompt({
+        warnings,
+        apply: () => attemptLiveSwap(playerId, position)
+      });
+      return;
+    }
+    attemptLiveSwap(playerId, position);
   };
 
   // ----------------------------------------
@@ -299,7 +359,15 @@ export function LineupView({ onBack, onGameCompleted }) {
   }, [game, playerName]);
 
   const handleComplete = (confirmations) => {
-    const completed = completeGame(game, confirmations, roster);
+    let completed;
+    try {
+      // The domain enforces the confirmation contract independently of the
+      // UI - an unreviewed pitcher can never slip through
+      completed = completeGame(game, confirmations, roster);
+    } catch (e) {
+      showToast(e.message, 'error');
+      return;
+    }
     setGames([...games.filter(g => g.id !== completed.id), completed]);
     setGame(null);
     setCompleteModal(false);
@@ -385,11 +453,40 @@ export function LineupView({ onBack, onGameCompleted }) {
   };
 
   // Manual plan change: one validated transaction across lineup, locks,
-  // and pitcher assignments (H10)
+  // and pitcher assignments (H10), gated by the same pitching policy as
+  // every other path - for the mover AND for whoever gets displaced (H6)
   const handlePositionSelect = (newPosition) => {
     const { player, inning } = positionModal;
     setPositionModal(null);
 
+    const ctx = { enforcePitcherCatcherRule: !isSoftball, live: false };
+    const moverWarnings = assessPositionChange(player, newPosition, game, games, settings.pitchRules, ctx);
+
+    // Who would be displaced, and where would they land?
+    const holder = newPosition !== 'SIT'
+      ? activePlayers.find(p => p.id !== player.id && game.lineup?.[`${p.id}-${inning}`] === newPosition)
+      : null;
+    const oldPosition = game.lineup?.[`${player.id}-${inning}`] || null;
+    const displacedWarnings = holder && oldPosition
+      ? assessPositionChange(holder, oldPosition, game, games, settings.pitchRules, ctx)
+      : [];
+
+    const allWarnings = [...moverWarnings, ...displacedWarnings];
+    const proceed = () => applyPositionSwap(player, inning, newPosition);
+
+    if (allWarnings.some(w => w.severity === 'block')) {
+      setWarnings(allWarnings.map(w => w.message));
+      return; // planning blocks what live reality would only warn about
+    }
+    if (allWarnings.length > 0) {
+      setPlanOverridePrompt({ warnings: allWarnings, proceed });
+      return;
+    }
+    proceed();
+  };
+
+  const applyPositionSwap = (player, inning, newPosition) => {
+    const prevGame = game; // real undo: restore this exact snapshot
     const { game: swapped, changes } = applyPlanSwap(game, player, inning, newPosition, activePlayers);
     const planIssues = validateGamePlan(swapped);
     if (planIssues.length > 0) setWarnings(planIssues);
@@ -397,7 +494,7 @@ export function LineupView({ onBack, onGameCompleted }) {
 
     const displacements = changes.filter(c => c.type === 'displaced');
     if (displacements.length > 0) {
-      setDisplacementModal({ changes: changes.map(c => ({ ...c, player: c.playerName })), inning });
+      setDisplacementModal({ changes: changes.map(c => ({ ...c, player: c.playerName })), inning, prevGame });
     }
   };
 
@@ -821,10 +918,79 @@ export function LineupView({ onBack, onGameCompleted }) {
           changes={displacementModal.changes}
           onAccept={() => setDisplacementModal(null)}
           onUndo={() => {
-            generateLineup(displacementModal.inning);
+            // Real rollback: restore the exact pre-swap snapshot rather
+            // than re-solving into a different lineup
+            setGame(displacementModal.prevGame);
             setDisplacementModal(null);
           }}
           onClose={() => setDisplacementModal(null)}
+        />
+      )}
+
+      {planOverridePrompt && (
+        <Modal title="Pitching Rule Warning" onClose={() => setPlanOverridePrompt(null)}>
+          <Alert type="warning">
+            {planOverridePrompt.warnings.map((w, i) => <div key={i}>{w.message}</div>)}
+          </Alert>
+          <p className="text-small text-muted" style={{ margin: '12px 0' }}>
+            Overriding records your choice but does not change your league's rules.
+          </p>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setPlanOverridePrompt(null)}>
+              Cancel
+            </button>
+            <button
+              className="btn btn-danger"
+              style={{ flex: 1 }}
+              onClick={() => {
+                planOverridePrompt.proceed();
+                setPlanOverridePrompt(null);
+              }}
+            >
+              Override & Apply
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {liveOverridePrompt && (
+        <Modal title="Rule Warning" onClose={() => setLiveOverridePrompt(null)}>
+          <Alert type="warning">
+            {liveOverridePrompt.warnings.map((w, i) => <div key={i}>{w.message}</div>)}
+          </Alert>
+          <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setLiveOverridePrompt(null)}>
+              Cancel
+            </button>
+            <button
+              className="btn btn-danger"
+              style={{ flex: 1 }}
+              onClick={() => {
+                liveOverridePrompt.apply();
+                setLiveOverridePrompt(null);
+              }}
+            >
+              Override & Apply
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {capPrompt && (
+        <ConfirmDialog
+          title="Pitching Workload Check"
+          message={
+            capPrompt.warnings.map(w => w.message).join('. ') +
+            '. Recording keeps what actually happened; make a pitching change first if this was unintended.'
+          }
+          confirmLabel="Record Anyway"
+          danger
+          onConfirm={() => {
+            capAcks.current.add(capPrompt.pitcherId);
+            setCapPrompt(null);
+            proceedRecordOut(capPrompt.bulk);
+          }}
+          onCancel={() => setCapPrompt(null)}
         />
       )}
 

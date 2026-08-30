@@ -245,3 +245,115 @@ describe('unknownCount fixture sanity', () => {
     expect(unknownCount().status).toBe('unknown');
   });
 });
+
+import {
+  assessPositionChange,
+  capCrossingWarnings,
+  pcTransitionWarnings
+} from './pitching';
+import { endInningOuts, startLiveGame } from './games';
+import type { Game } from './types';
+
+describe('P/C transition rules from actual participation', () => {
+  const catcher = makePlayer('c1', 'Cal', { canCatch: true, canPitch: true });
+
+  function gameWhereC1Caught(): Game {
+    return makeGame({
+      status: 'live',
+      battingOrder: ['c1'],
+      outs: outsFromInnings([{ c1: 'C' }]),
+      live: { inning: 2, outsRecorded: 0, assignments: { c1: 'SIT' } }
+    });
+  }
+
+  it('warns when a player who caught takes the mound (baseball)', () => {
+    const w = pcTransitionWarnings(catcher, 'P', gameWhereC1Caught(), true);
+    expect(w.some(x => x.short === 'Caught this game')).toBe(true);
+  });
+
+  it('warns when a player who pitched moves behind the plate', () => {
+    const g = makeGame({
+      status: 'live',
+      battingOrder: ['c1'],
+      outs: outsFromInnings([{ c1: 'P' }]),
+      live: { inning: 2, outsRecorded: 0, assignments: { c1: 'SIT' } }
+    });
+    expect(pcTransitionWarnings(catcher, 'C', g, true).some(x => x.short === 'Pitched this game')).toBe(true);
+  });
+
+  it('softball (enforce=false) has no P/C restriction', () => {
+    expect(pcTransitionWarnings(catcher, 'P', gameWhereC1Caught(), false)).toEqual([]);
+  });
+
+  it('the live formation counts too, not just recorded outs', () => {
+    const g = makeGame({
+      status: 'live',
+      battingOrder: ['c1'],
+      outs: [],
+      live: { inning: 1, outsRecorded: 0, assignments: { c1: 'C' } }
+    });
+    expect(pcTransitionWarnings(catcher, 'P', g, true).length).toBe(1);
+  });
+});
+
+describe('assessPositionChange (the single gate for every path)', () => {
+  const rules = DEFAULT_SETTINGS.pitchRules;
+
+  it('bench-to-P goes through the full pitching policy', () => {
+    const p = makePlayer('p9', 'Ben');
+    const prior = [completedOuting('y', '2026-07-05', 'p9', 45, 3)];
+    const g = makeGame({ id: 'today', date: '2026-07-06', status: 'live', live: { inning: 1, outsRecorded: 0, assignments: {} } });
+    const w = assessPositionChange(p, 'P', g, prior, rules, { enforcePitcherCatcherRule: true, live: true });
+    expect(w.some(x => x.short.includes('rest'))).toBe(true);
+  });
+
+  it('planning blocks a non-catcher at C; live only warns', () => {
+    const p = makePlayer('nc', 'Ned', { canCatch: false });
+    const g = makeGame({});
+    const plan = assessPositionChange(p, 'C', g, [], rules, { enforcePitcherCatcherRule: true, live: false });
+    const live = assessPositionChange(p, 'C', g, [], rules, { enforcePitcherCatcherRule: true, live: true });
+    expect(plan[0].severity).toBe('block');
+    expect(live[0].severity).toBe('warn');
+  });
+
+  it('avoided positions warn; SIT never warns', () => {
+    const p = makePlayer('av', 'Ava', { positions: { '1B': 'avoid' } });
+    const g = makeGame({});
+    expect(assessPositionChange(p, '1B', g, [], rules, { enforcePitcherCatcherRule: true, live: false })[0].short).toBe('Avoided position');
+    expect(assessPositionChange(p, 'SIT', g, [], rules, { enforcePitcherCatcherRule: true, live: false })).toEqual([]);
+  });
+});
+
+describe('capCrossingWarnings (continuation checkpoint)', () => {
+  it('warns exactly when the next out crosses the per-game innings cap', () => {
+    const capRules = { ...DEFAULT_SETTINGS.pitchRules, limitType: 'innings' as const, maxInningsPerGame: 1 };
+    // Pitcher a has thrown 2 outs and stays on the mound
+    let g = makeGame({
+      innings: 2,
+      status: 'live',
+      battingOrder: ['a'],
+      outs: outsFromInnings([{ a: 'P' }]).slice(0, 2),
+      live: { inning: 1, outsRecorded: 2, assignments: { a: 'P' } }
+    });
+    // Recording the 3rd out reaches exactly the cap (3 outs = 1 inning): no crossing
+    expect(capCrossingWarnings(g, [], capRules, 1)).toEqual([]);
+    // At the cap, the NEXT out crosses it
+    g = { ...g, outs: outsFromInnings([{ a: 'P' }]), live: { inning: 2, outsRecorded: 0, assignments: { a: 'P' } } };
+    expect(capCrossingWarnings(g, [], capRules, 1).some(w => w.short === 'Crosses game cap')).toBe(true);
+  });
+
+  it('warns when the current pitcher is at the daily pitch max', () => {
+    const g = makeGame({
+      status: 'live',
+      battingOrder: ['a'],
+      pitchCounts: { a: { live: 85, byInning: {}, confirmed: null, status: 'live' } },
+      live: { inning: 1, outsRecorded: 0, assignments: { a: 'P' } }
+    });
+    expect(capCrossingWarnings(g, [], DEFAULT_SETTINGS.pitchRules, 1).some(w => w.short === 'Over daily max')).toBe(true);
+  });
+
+  it('no pitcher on the mound -> nothing to warn about', () => {
+    const g = startLiveGame(makeGame({ battingOrder: ['a'] }));
+    expect(capCrossingWarnings(endInningOuts(g), [], DEFAULT_SETTINGS.pitchRules, 1)).toEqual([]);
+  });
+});

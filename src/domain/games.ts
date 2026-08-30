@@ -54,7 +54,7 @@ export function activePlayerIdsAt(game: Game, inning: number): string[] {
 }
 
 export interface FormationIssue {
-  type: 'duplicate' | 'vacant' | 'unassigned';
+  type: 'duplicate' | 'vacant' | 'unassigned' | 'inactive';
   message: string;
 }
 
@@ -66,6 +66,7 @@ export function validateFormation(
 ): FormationIssue[] {
   const issues: FormationIssue[] = [];
   const positions = getFieldingPositions(fielderCount);
+  const activeSet = new Set(activeIds);
   const holders = new Map<Position, string[]>();
   for (const [pid, pos] of Object.entries(assignments)) {
     if (pos === 'SIT') continue;
@@ -83,6 +84,10 @@ export function validateFormation(
   const unassigned = activeIds.filter(id => !assignments[id]);
   if (unassigned.length > 0) {
     issues.push({ type: 'unassigned', message: `${unassigned.length} active player(s) with no assignment (position or SIT)` });
+  }
+  const inactive = Object.keys(assignments).filter(id => !activeSet.has(id));
+  if (inactive.length > 0) {
+    issues.push({ type: 'inactive', message: `${inactive.length} exited/removed player(s) still in the formation` });
   }
   return issues;
 }
@@ -162,13 +167,21 @@ export function undoOut(game: Game): Game {
   if (game.status !== 'live' || !game.live || game.outs.length === 0) return game;
   const outs = game.outs.slice(0, -1);
   const undone = game.outs[game.outs.length - 1];
+  // Players who exited after the out was recorded must not reappear in the
+  // restored formation - the ledger keeps them, the live defense does not.
+  const assignments: Record<string, Assignment> = {};
+  for (const [pid, pos] of Object.entries(undone.assignments)) {
+    const exitedAt = game.exitedPlayers?.[pid];
+    if (exitedAt && undone.inning >= exitedAt) continue;
+    assignments[pid] = pos;
+  }
   return {
     ...game,
     outs,
     live: {
       inning: undone.inning,
       outsRecorded: undone.outInInning - 1,
-      assignments: { ...undone.assignments }
+      assignments
     }
   };
 }
@@ -281,6 +294,11 @@ export function playersNeedingPitchConfirmation(game: Game): string[] {
  * Finalize a game. Only recorded outs and the supplied confirmations become
  * history; unplayed plan innings vanish. Name snapshots are taken so history
  * survives roster edits.
+ *
+ * The confirmation contract is enforced HERE, not just in the UI: every
+ * player who actually pitched must have an explicit confirmation (a number,
+ * or null = "cannot be established"). A missing confirmation throws - an
+ * unreviewed working count can never silently become authoritative.
  */
 export function completeGame(
   game: Game,
@@ -288,6 +306,12 @@ export function completeGame(
   roster: Player[],
   now: Date = new Date()
 ): Game {
+  const confirmedIds = new Set(confirmations.map(c => c.playerId));
+  const missing = playersNeedingPitchConfirmation(game).filter(id => !confirmedIds.has(id));
+  if (missing.length > 0) {
+    throw new Error(`Cannot complete: ${missing.length} pitcher(s) without a reviewed pitch count`);
+  }
+
   const pitchCounts = { ...game.pitchCounts };
   for (const c of confirmations) {
     const entry = getPitchCountEntry(game, c.playerId);
@@ -317,6 +341,59 @@ export function completeGame(
     completedAt: now.toISOString(),
     participationQuality: game.participationQuality || 'exact'
   };
+}
+
+/* ============================================
+   Participation corrections (completed games)
+
+   The out ledger stays the single source of truth; corrections
+   REPLACE snapshots rather than layering adjustments on top.
+   After any structural change the ledger is resequenced: outs
+   are an ordered list, three per inning, and inning/out numbers
+   are derived from position. All analytics and workload recompute
+   automatically because they are always derived from the ledger.
+   ============================================ */
+
+/** Re-derive seq/inning/outInInning from ledger order (3 outs per inning). */
+export function resequenceOuts(outs: DefensiveOut[]): DefensiveOut[] {
+  return outs.map((out, idx) => ({
+    ...out,
+    seq: idx + 1,
+    inning: Math.floor(idx / OUTS_PER_INNING) + 1,
+    outInInning: ((idx % OUTS_PER_INNING) + 1) as 1 | 2 | 3
+  }));
+}
+
+/** Replace one recorded out's formation (correcting a wrong snapshot). */
+export function editOutAssignments(game: Game, seq: number, assignments: Record<string, Assignment>): Game {
+  const outs = game.outs.map(o =>
+    o.seq === seq ? { ...o, assignments: { ...assignments }, estimated: false } : o
+  );
+  return { ...game, outs: resequenceOuts(outs) };
+}
+
+/**
+ * Insert a missed out after `seq` (0 = at the start), cloning the adjacent
+ * out's formation as the starting point for correction.
+ */
+export function insertOutAfter(game: Game, seq: number): Game {
+  const idx = game.outs.findIndex(o => o.seq === seq);
+  const template = idx >= 0 ? game.outs[idx] : game.outs[0];
+  if (!template) return game;
+  const inserted: DefensiveOut = {
+    ...template,
+    assignments: { ...template.assignments },
+    estimated: false
+  };
+  const outs = [...game.outs];
+  outs.splice(idx + 1, 0, inserted);
+  return { ...game, outs: resequenceOuts(outs) };
+}
+
+/** Delete an erroneously recorded out. */
+export function deleteOutAt(game: Game, seq: number): Game {
+  const outs = game.outs.filter(o => o.seq !== seq);
+  return { ...game, outs: resequenceOuts(outs) };
 }
 
 /** Correct a completed game's confirmed pitch count (from history). */

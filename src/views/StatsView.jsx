@@ -391,8 +391,8 @@ export function StatsView() {
       <div className="card">
         <div className="card-body" style={{ padding: 'var(--space-md)' }}>
           <div className="stats-grid">
-            <StatCard value={gamesInRange.length} label="Games" />
-            <StatCard value={formatOutsAsInnings(totalOuts)} label="Player Innings" title="Sum of recorded defensive outs across players, in innings" />
+            <StatCard value={gamesInRange.length} label="Games Tracked" title="Completed games in this period" />
+            <StatCard value={formatOutsAsInnings(totalOuts)} label="Player-Innings Tracked" title="Recorded defensive outs across players (bench included), in innings" />
             <StatCard value={totalPitches} label="Pitches" />
             <StatCard
               value={pitching.length}

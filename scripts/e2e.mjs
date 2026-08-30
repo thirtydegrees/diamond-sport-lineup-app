@@ -174,17 +174,38 @@ currentHdr === '3' ? ok('plan grid highlights the live inning (3)') : fail(`curr
 await page.click('button:has-text("Complete Game")');
 await page.waitForSelector('.modal:has-text("Complete Game")');
 const confirmRows = await page.locator('.modal input[type="number"]').count();
-confirmRows >= 2 ? ok(`completion asks to confirm ${confirmRows} pitcher counts`) : fail(`confirmation rows: ${confirmRows}`);
+confirmRows >= 2 ? ok(`completion asks to review ${confirmRows} pitcher counts`) : fail(`confirmation rows: ${confirmRows}`);
 
-// First pitcher: the working count (5) is presented; coach corrects it to 8
-// (reconciling against the official book). Second pitcher: mark unknown.
+// The Complete button is locked until every pitcher is explicitly reviewed -
+// an untouched prefill is never accepted as confirmation
+const lockedBtn = page.locator('.modal-footer button', { hasText: /Review \d/ });
+(await lockedBtn.count()) === 1 && (await lockedBtn.isDisabled())
+  ? ok('completion is locked until every pitch count is explicitly reviewed')
+  : fail('completion not locked on unreviewed counts');
+
+// First pitcher: working count (5) offered; coach corrects to 8 and confirms
 const firstInput = page.locator('.modal input[type="number"]').first();
 (await firstInput.inputValue()) === '5'
   ? ok('working count (5) presented for quick confirmation')
   : fail(`prefilled count: ${await firstInput.inputValue()}`);
 await firstInput.fill('8');
-await page.locator('.modal .checkbox-input').last().check();
-await page.click('button:has-text("Confirm & Complete")');
+await page.locator('.modal button:has-text("Confirm")').first().click();
+await page.waitForSelector('.modal :text("✓ 8")');
+ok('explicit per-pitcher confirmation records the corrected total');
+
+// Second pitcher pitched but has 0 counted: confirming the untouched zero
+// demands a deliberate acknowledgment, not a silent accept
+await page.locator('.modal button:has-text("Confirm")').first().click();
+await page.waitForSelector('.modal:has-text("Confirm Zero Pitches?")');
+ok('a zero count for a real pitcher requires deliberate acknowledgment');
+await page.click('.modal button:has-text("Back")');
+
+// The coach actually has no trustworthy count: the exceptional path needs
+// its own second acknowledgment and promises maximum rest
+await page.locator('button[title="No trustworthy count can be established"]').first().click();
+await page.waitForSelector('.modal:has-text("maximum rest")');
+await page.click('button:has-text("I understand - no count")');
+await page.click('.modal-footer button:has-text("✓ Complete Game")');
 
 // Completion lands on History
 await page.waitForSelector('.card-title:has-text("Past Games")');
@@ -209,19 +230,46 @@ const participation = await page.textContent('.stats-table');
 
 // Confirmed count correction: 8 -> 40 for the first pitcher
 await page.waitForSelector('text=Final pitch counts');
-await page.locator('button:has-text("✏️")').first().click();
+await page.locator('button:text-is("✏️")').first().click();
 await page.locator('input[aria-label^="Corrected pitches"]').fill('40');
 await page.click('button:has-text("Save")');
 await page.waitForSelector('.toast:has-text("Pitch count corrected")');
 ok('confirmed count corrected from history (8 -> 40)');
 
 // Resolve the unknown count too
-await page.locator('button:has-text("✏️")').last().click();
+await page.locator('button:text-is("✏️")').last().click();
 await page.locator('input[aria-label^="Corrected pitches"]').fill('12');
 await page.click('button:has-text("Save")');
 await page.waitForTimeout(200);
 const stillNeeded = await page.locator('text=count needed').count();
 stillNeeded === 0 ? ok('unknown count resolved via history correction') : fail('count-needed flag still present');
+
+// Participation corrections: delete a recorded out, then insert one back
+await page.click('button:has-text("Fix Participation")');
+await page.waitForSelector('text=Inn 1 · out 1');
+const outRowsBefore = await page.locator('button[title="Delete this out"]').count();
+await page.locator('button[title="Delete this out"]').first().click();
+await page.waitForSelector('.modal:has-text("Remove this recorded out?")');
+await page.click('.modal button:has-text("Delete Out")');
+await page.waitForTimeout(200);
+const outRowsAfterDelete = await page.locator('button[title="Delete this out"]').count();
+outRowsAfterDelete === outRowsBefore - 1
+  ? ok('participation editor deletes a recorded out (ledger resequenced)')
+  : fail(`out rows ${outRowsBefore} -> ${outRowsAfterDelete}`);
+await page.locator('button[title^="Insert a missed out"]').first().click();
+await page.waitForTimeout(200);
+const outRowsAfterInsert = await page.locator('button[title="Delete this out"]').count();
+outRowsAfterInsert === outRowsBefore
+  ? ok('participation editor inserts a missed out')
+  : fail(`out rows after insert: ${outRowsAfterInsert}`);
+
+// Correct one out's formation through the editor
+await page.locator('button[title="Correct this out\'s formation"]').first().click();
+await page.waitForSelector('.modal:has-text("Inning 1 · Out 1")');
+await page.click('.modal button:has-text("Save Correction")');
+await page.waitForTimeout(200);
+ok('out formation editor opens and saves');
+await page.click('button:has-text("Done Editing")');
 
 // Delete asks for confirmation and can be cancelled
 await page.click('button:has-text("Delete Game")');
@@ -241,7 +289,7 @@ const kpiPitches = (await page.locator('.stat-card:has(.stat-label:text-is("Pitc
 kpiPitches === '52' ? ok('Pitches KPI reflects corrected confirmed counts (52)') : fail(`Pitches KPI: ${kpiPitches}`);
 
 // 2 recorded innings x 12 players = 72 outs = 24 player-innings
-const kpiInnings = (await page.locator('.stat-card:has(.stat-label:text-is("Player Innings")) .stat-value').textContent()).trim();
+const kpiInnings = (await page.locator('.stat-card:has(.stat-label:text-is("Player-Innings Tracked")) .stat-value').textContent()).trim();
 kpiInnings === '24' ? ok('Player Innings KPI derives from recorded outs (24)') : fail(`Player Innings KPI: ${kpiInnings}`);
 
 const segCount = await page.locator('.hbar-seg').count();
@@ -270,7 +318,7 @@ await page.locator('.card:has-text("Playing Time")').locator('button:has-text("C
 
 // Range filter scopes the cards: the game is pinned to 2026-07-06, so the
 // rolling 7-day window excludes it while Full Season includes it
-const gamesKpi = () => page.locator('.stat-card:has(.stat-label:text-is("Games")) .stat-value').textContent();
+const gamesKpi = () => page.locator('.stat-card:has(.stat-label:text-is("Games Tracked")) .stat-value').textContent();
 const kpiGamesSeason = (await gamesKpi()).trim();
 kpiGamesSeason === '1' ? ok('full-season filter includes the completed game') : fail(`Games KPI (season): ${kpiGamesSeason}`);
 await page.click('button:has-text("Last 7 Days")');

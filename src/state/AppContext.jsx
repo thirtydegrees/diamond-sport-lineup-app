@@ -18,6 +18,7 @@ import { newId } from '../domain/ids';
 import { Storage, StorageKeys } from '../services/storage';
 import { supabase } from '../services/supabaseClient';
 import { Sync } from '../services/sync';
+import { Modal } from '../components/ui';
 
 export const AppContext = React.createContext(null);
 
@@ -103,8 +104,29 @@ export function AppProvider({ children }) {
   // Surface sync status changes
   React.useEffect(() => Sync.onStatus(setSyncStatus), []);
 
+  // When automatic conflict resolution applies remote data outside an
+  // explicit sync call, React state must follow immediately - otherwise the
+  // screen keeps showing the losing local version and the next edit would
+  // overwrite the winner again.
+  React.useEffect(() => Sync.onRemoteApplied(() => {
+    reloadFromStorage();
+    showToast('Updated with newer changes from your account');
+  }), [reloadFromStorage, showToast]);
+
+  // Account-conflict guard: local data owned by a different account
+  const [accountConflict, setAccountConflict] = React.useState(null);
+  // Supabase password-recovery flow (user arrived via a reset email)
+  const [passwordRecovery, setPasswordRecovery] = React.useState(false);
+
   const runInitialSync = React.useCallback(async (sessionUser) => {
     setProvisioningError(null);
+    // The device may hold another coach's team: never auto-sync across the
+    // boundary - make the user choose explicitly.
+    const conflict = Sync.checkAccountConflict(sessionUser.id);
+    if (conflict) {
+      setAccountConflict({ owner: conflict, user: sessionUser });
+      return false;
+    }
     try {
       const decision = await Sync.initialSync(sessionUser.id);
       if (decision === 'applyRemote') {
@@ -133,10 +155,14 @@ export function AppProvider({ children }) {
     };
 
     supabase.auth.getSession().then(({ data }) => handleSession(data.session));
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setPasswordRecovery(true);
+      }
       if (!session) {
         // Auth is gone (sign-out here, another tab, or expiry): stop sync
-        // NOW so no queued write can outlive the account (H4)
+        // NOW so no queued write can outlive the account (H4). Dirty flags
+        // and the data-owner marker survive inside the sync service.
         initialSyncRan.current = false;
         Sync.disable();
         setUser(null);
@@ -151,6 +177,26 @@ export function AppProvider({ children }) {
       sub.subscription.unsubscribe();
     };
   }, [runInitialSync]);
+
+  /** Resolve an account conflict: replace device data with this account's. */
+  const resolveAccountConflict = React.useCallback(async (choice) => {
+    const conflict = accountConflict;
+    setAccountConflict(null);
+    if (!conflict) return;
+    if (choice === 'replace') {
+      try {
+        await Sync.adoptAccount(conflict.user.id);
+        reloadFromStorage();
+        showToast('Loaded your account data on this device');
+      } catch (e) {
+        setProvisioningError(e?.message || 'Cloud sync is unavailable');
+        showToast('Could not load your account data - working locally', 'error');
+      }
+    } else {
+      // Sign out and leave the other account's local data untouched
+      await supabase.auth.signOut();
+    }
+  }, [accountConflict, reloadFromStorage, showToast]);
 
   // ----------------------------------------
   // Account actions
@@ -167,8 +213,18 @@ export function AppProvider({ children }) {
     return { needsConfirmation: !data.session };
   }, []);
 
-  const signOut = React.useCallback(async () => {
+  /**
+   * Sign out. Tries to flush pending changes first; if some still haven't
+   * reached the account, returns { pending: true } WITHOUT signing out so
+   * the UI can ask the coach explicitly. Pending edits that are signed out
+   * anyway stay on the device (with their dirty flags) and sync on the next
+   * sign-in to the same account.
+   */
+  const signOut = React.useCallback(async ({ force = false } = {}) => {
     await Sync.flushBeforeSignOut();
+    if (!force && Sync.hasPendingChanges()) {
+      return { pending: true };
+    }
     const { error } = await supabase.auth.signOut();
     if (error) {
       // The session may still be alive; do NOT claim a sign-out happened
@@ -181,7 +237,34 @@ export function AppProvider({ children }) {
     initialSyncRan.current = false;
     setUser(null);
     showToast('Signed out - your data stays on this device');
+    return { pending: false };
   }, [showToast]);
+
+  /** Switch to another of this account's teams (replaces local data). */
+  const switchTeam = React.useCallback(async (team) => {
+    await Sync.switchTeam(team);
+    reloadFromStorage();
+    showToast(`Now working with ${team.name}`);
+  }, [reloadFromStorage, showToast]);
+
+  const resetPassword = React.useCallback(async (email) => {
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: window.location.origin
+    });
+    if (error) throw error;
+  }, []);
+
+  const updatePassword = React.useCallback(async (newPassword) => {
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) throw error;
+    setPasswordRecovery(false);
+    showToast('Password updated');
+  }, [showToast]);
+
+  const resendConfirmation = React.useCallback(async (email) => {
+    const { error } = await supabase.auth.resend({ type: 'signup', email: email.trim() });
+    if (error) throw error;
+  }, []);
 
   const syncNow = React.useCallback(async () => {
     // A failed initial provisioning can be retried from the same button
@@ -219,7 +302,10 @@ export function AppProvider({ children }) {
     signIn,
     signUp,
     signOut,
-    syncNow
+    syncNow,
+    switchTeam,
+    resetPassword,
+    resendConfirmation
   };
 
   return (
@@ -232,6 +318,84 @@ export function AppProvider({ children }) {
           </div>
         ))}
       </div>
+
+      {accountConflict && (
+        <Modal
+          title="This Device Holds Another Team's Data"
+          onClose={() => resolveAccountConflict('signOut')}
+        >
+          <p style={{ marginBottom: '12px' }}>
+            The data on this device belongs to a different account
+            (team "{accountConflict.owner.teamName || 'My Team'}"). To protect both
+            coaches' data, it will not be uploaded to your account.
+          </p>
+          <p className="text-muted text-small" style={{ marginBottom: '16px' }}>
+            "Use My Account" replaces the data on this device with your own
+            account's team data. The other coach's data is safe in their
+            account's cloud copy.
+          </p>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => resolveAccountConflict('signOut')}>
+              Sign Out
+            </button>
+            <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => resolveAccountConflict('replace')}>
+              Use My Account
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {passwordRecovery && (
+        <PasswordRecoveryModal
+          onSubmit={updatePassword}
+          onClose={() => setPasswordRecovery(false)}
+        />
+      )}
     </AppContext.Provider>
+  );
+}
+
+function PasswordRecoveryModal({ onSubmit, onClose }) {
+  const [password, setPassword] = React.useState('');
+  const [error, setError] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+
+  const submit = async () => {
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await onSubmit(password);
+    } catch (e) {
+      setError(e.message || 'Could not update the password');
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title="Set a New Password" onClose={onClose}>
+      <p className="text-muted text-small mb-md">
+        You followed a password-reset link. Choose a new password for your account.
+      </p>
+      <div className="form-group">
+        <label className="form-label">New Password</label>
+        <input
+          type="password"
+          className="form-input"
+          value={password}
+          autoComplete="new-password"
+          placeholder="At least 8 characters"
+          onChange={(e) => setPassword(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+        />
+      </div>
+      {error && <p className="text-small text-danger mb-md">{error}</p>}
+      <button className="btn btn-primary btn-block" disabled={busy || !password} onClick={submit}>
+        Update Password
+      </button>
+    </Modal>
   );
 }

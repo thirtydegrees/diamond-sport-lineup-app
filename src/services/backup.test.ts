@@ -108,3 +108,49 @@ describe('restoreBackup atomicity (H11)', () => {
     expect(Storage.getGames()).toHaveLength(1);
   });
 });
+
+describe('deep v2 validation (malformed nested structures)', () => {
+  function v2With(gamePatch: Record<string, unknown>) {
+    seedDevice();
+    const backup = JSON.parse(JSON.stringify(buildBackup()));
+    backup.data.games[0] = { ...backup.data.games[0], ...gamePatch };
+    return backup;
+  }
+
+  it('rejects null out entries', () => {
+    expect(() => validateBackup(v2With({ outs: [null] }))).toThrow(BackupError);
+  });
+
+  it('rejects an out without assignments', () => {
+    expect(() => validateBackup(v2With({ outs: [{ seq: 1, inning: 1, outInInning: 1 }] }))).toThrow(/assignments/);
+  });
+
+  it('rejects invalid assignment values inside an out', () => {
+    expect(() => validateBackup(v2With({
+      outs: [{ seq: 1, inning: 1, outInInning: 1, assignments: { a: 'QB' } }]
+    }))).toThrow(/invalid assignment/);
+  });
+
+  it('rejects invalid out numbers and innings', () => {
+    expect(() => validateBackup(v2With({
+      outs: [{ seq: 1, inning: 0, outInInning: 1, assignments: { a: 'P' } }]
+    }))).toThrow(/invalid inning/);
+    expect(() => validateBackup(v2With({
+      outs: [{ seq: 1, inning: 1, outInInning: 7, assignments: { a: 'P' } }]
+    }))).toThrow(/invalid out number/);
+  });
+
+  it('rejects malformed pitch-count entries', () => {
+    expect(() => validateBackup(v2With({ pitchCounts: { a: { live: 'many' } } }))).toThrow(BackupError);
+    expect(() => validateBackup(v2With({
+      pitchCounts: { a: { live: 5, byInning: {}, confirmed: -3, status: 'confirmed' } }
+    }))).toThrow(/invalid confirmed/);
+    expect(() => validateBackup(v2With({
+      pitchCounts: { a: { live: 5, byInning: {}, confirmed: null, status: 'maybe' } }
+    }))).toThrow(/status/);
+  });
+
+  it('rejects malformed live state', () => {
+    expect(() => validateBackup(v2With({ status: 'live', live: { inning: 'one' } }))).toThrow(/live state/);
+  });
+});

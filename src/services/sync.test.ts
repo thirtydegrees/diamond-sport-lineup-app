@@ -83,3 +83,65 @@ describe('decideKeySync', () => {
     })).toBe('apply');
   });
 });
+
+import { decideSignInAction, Sync, clearSyncMeta, getDataOwner, type DataOwner } from './sync';
+
+// Minimal localStorage shim for node (service-level tests below)
+const store = new Map<string, string>();
+(globalThis as { localStorage?: unknown }).localStorage = {
+  getItem: (k: string) => store.get(k) ?? null,
+  setItem: (k: string, v: string) => { store.set(k, v); },
+  removeItem: (k: string) => { store.delete(k); }
+};
+
+describe('decideSignInAction (account-bound local data)', () => {
+  const owner: DataOwner = { userId: 'coach-a', teamId: 't1', teamName: 'Tigers' };
+
+  it('unowned local data (created signed-out) is adopted by the first account', () => {
+    expect(decideSignInAction(null, 'coach-a')).toBe('proceed');
+  });
+
+  it('the owning account proceeds normally', () => {
+    expect(decideSignInAction(owner, 'coach-a')).toBe('proceed');
+  });
+
+  it('a DIFFERENT account signing in is a conflict - never auto-uploaded', () => {
+    expect(decideSignInAction(owner, 'coach-b')).toBe('conflict');
+  });
+});
+
+describe('dirty state survives sign-out (unsynced edits are not lost)', () => {
+  it('markDirty -> disable() keeps the per-key dirty flags and the owner marker', () => {
+    store.clear();
+    localStorage.setItem('ybl_dataOwner', JSON.stringify({ userId: 'u1', teamId: 't1', teamName: 'T' }));
+    Sync.markDirty('roster');
+    Sync.markDirty('games');
+    expect(Sync.hasPendingChanges()).toBe(true);
+
+    Sync.disable(); // sign-out
+
+    // Dirty flags and the owner marker survive: the next sign-in to the
+    // SAME account pushes the offline edits instead of losing them
+    expect(Sync.hasPendingChanges()).toBe(true);
+    expect(getDataOwner()).toMatchObject({ userId: 'u1', teamId: 't1' });
+    const meta = JSON.parse(localStorage.getItem('ybl_syncMeta') || '{}');
+    expect(meta.keys.roster.dirty).toBe(true);
+    expect(meta.keys.games.dirty).toBe(true);
+  });
+
+  it('clearSyncMeta (clear-all / adoption) wipes both meta and owner', () => {
+    store.clear();
+    localStorage.setItem('ybl_dataOwner', JSON.stringify({ userId: 'u1', teamId: 't1', teamName: 'T' }));
+    Sync.markDirty('roster');
+    clearSyncMeta();
+    expect(Sync.hasPendingChanges()).toBe(false);
+    expect(getDataOwner()).toBeNull();
+  });
+
+  it('checkAccountConflict flags a different signing-in user', () => {
+    store.clear();
+    localStorage.setItem('ybl_dataOwner', JSON.stringify({ userId: 'u1', teamId: 't1', teamName: 'Tigers' }));
+    expect(Sync.checkAccountConflict('u1')).toBeNull();
+    expect(Sync.checkAccountConflict('u2')).toMatchObject({ userId: 'u1', teamName: 'Tigers' });
+  });
+});

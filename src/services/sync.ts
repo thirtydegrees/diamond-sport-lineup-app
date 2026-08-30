@@ -62,6 +62,48 @@ interface SyncMeta {
 }
 
 const META_STORAGE_KEY = 'ybl_syncMeta';
+const OWNER_STORAGE_KEY = 'ybl_dataOwner';
+
+/**
+ * Who the data currently in local storage belongs to. Set on every
+ * successful sync/team switch, and NEVER cleared by sign-out - it is the
+ * guard that stops one coach's roster from being uploaded into another
+ * coach's account on a shared device.
+ */
+export interface DataOwner {
+  userId: string;
+  teamId: string;
+  teamName: string;
+}
+
+export function getDataOwner(): DataOwner | null {
+  try {
+    const raw = localStorage.getItem(OWNER_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && parsed.userId && parsed.teamId ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function setDataOwner(owner: DataOwner | null) {
+  try {
+    if (owner === null) localStorage.removeItem(OWNER_STORAGE_KEY);
+    else localStorage.setItem(OWNER_STORAGE_KEY, JSON.stringify(owner));
+  } catch (e) {
+    console.error('data owner write failed:', e);
+  }
+}
+
+/**
+ * Pure sign-in guard, exported for tests: local data owned by a DIFFERENT
+ * account must never be auto-synced into the signing-in account.
+ */
+export function decideSignInAction(owner: DataOwner | null, userId: string): 'proceed' | 'conflict' {
+  if (!owner) return 'proceed'; // unowned (created signed-out) - first account adopts it
+  return owner.userId === userId ? 'proceed' : 'conflict';
+}
 
 function getMeta(): SyncMeta {
   try {
@@ -86,8 +128,10 @@ function keyMeta(meta: SyncMeta, key: string): KeyMeta {
   return meta.keys[key] || { dirty: false, dirtyAt: null, remoteUpdatedAt: null };
 }
 
+/** Full wipe: used by Clear All Data and account adoption - NOT by sign-out. */
 export function clearSyncMeta() {
   localStorage.removeItem(META_STORAGE_KEY);
+  localStorage.removeItem(OWNER_STORAGE_KEY);
 }
 
 export type KeyDecision = 'push' | 'apply' | 'none';
@@ -127,8 +171,15 @@ function writeLocal(key: string, value: unknown) {
   else Storage._set(key, value);
 }
 
+export interface TeamInfo {
+  id: string;
+  name: string;
+  is_personal: boolean;
+}
+
 class SyncService {
   private teamId: string | null = null;
+  private teamName: string | null = null;
   private userId: string | null = null;
   private ready = false; // no pushes until the initial reconcile ran
   private pushTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -136,6 +187,10 @@ class SyncService {
   private chains = new Map<string, Promise<void>>();
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private statusListeners = new Set<(s: SyncStatus) => void>();
+  /** Fired whenever remote data lands in local storage OUTSIDE an explicit
+      sync call (e.g. automatic conflict resolution), so React state can
+      reload instead of showing a stale losing version. */
+  private remoteAppliedListeners = new Set<() => void>();
   status: SyncStatus = 'signedOut';
   lastError: string | null = null;
 
@@ -164,6 +219,48 @@ class SyncService {
     return this.ready;
   }
 
+  get currentTeam(): { id: string; name: string } | null {
+    return this.teamId ? { id: this.teamId, name: this.teamName || 'My Team' } : null;
+  }
+
+  onRemoteApplied(listener: () => void): () => void {
+    this.remoteAppliedListeners.add(listener);
+    return () => this.remoteAppliedListeners.delete(listener);
+  }
+
+  private notifyRemoteApplied() {
+    this.remoteAppliedListeners.forEach(l => l());
+  }
+
+  /** Any local changes that have not been acknowledged by the server? */
+  hasPendingChanges(): boolean {
+    const meta = getMeta();
+    return SYNC_KEYS.some(k => keyMeta(meta, k).dirty);
+  }
+
+  /**
+   * Sign-in guard: returns the owner of the local dataset when it belongs
+   * to a DIFFERENT account (the caller must resolve before syncing).
+   */
+  checkAccountConflict(userId: string): DataOwner | null {
+    const owner = getDataOwner();
+    return decideSignInAction(owner, userId) === 'conflict' ? owner : null;
+  }
+
+  /**
+   * Resolve an account conflict by REPLACING the device's data with the
+   * signing-in account's cloud copy. The other account's local data is
+   * discarded here (it lives in that account's cloud); nothing is ever
+   * uploaded across the boundary.
+   */
+  async adoptAccount(userId: string): Promise<'pushLocal' | 'applyRemote'> {
+    for (const key of [...SYNC_KEYS, ...LEGACY_PULL_KEYS]) {
+      Storage._remove(key);
+    }
+    clearSyncMeta();
+    return this.initialSync(userId);
+  }
+
   /** Record that a local key changed (called on every persisted change). */
   markDirty(key: string) {
     if (!SYNC_KEYS.includes(key)) return;
@@ -177,30 +274,72 @@ class SyncService {
     SYNC_KEYS.forEach(k => this.markDirty(k));
   }
 
-  /**
-   * Find (or atomically create) the signed-in user's personal team.
-   * Prefers the 0002 migration's RPC; falls back to select-then-insert
-   * for projects that have not run it yet.
-   */
-  private async ensureTeam(): Promise<string> {
-    const { data: rpcData, error: rpcError } = await supabase.rpc('get_or_create_personal_team');
-    if (!rpcError && rpcData) return rpcData as string;
-
+  /** Every team the signed-in user belongs to (RLS-scoped server side). */
+  async listTeams(): Promise<TeamInfo[]> {
     const { data, error } = await supabase
       .from('teams')
-      .select('id')
-      .order('created_at', { ascending: true })
-      .limit(1);
-    if (error) throw error;
-    if (data && data.length > 0) return data[0].id;
+      .select('id,name,is_personal')
+      .order('created_at', { ascending: true });
+    if (!error) return (data || []) as TeamInfo[];
+    // Pre-0002 projects have no is_personal column: earliest team is treated
+    // as the personal one
+    const { data: plain, error: plainError } = await supabase
+      .from('teams')
+      .select('id,name')
+      .order('created_at', { ascending: true });
+    if (plainError) throw plainError;
+    return (plain || []).map((t, i) => ({ ...t, is_personal: i === 0 }));
+  }
 
+  /** Create an additional team (e.g. the 8U team next to the 10U team). */
+  async createTeam(name: string): Promise<TeamInfo> {
+    const teamName = name.trim() || 'New Team';
+    // Post-0002, is_personal defaults true and is unique per owner, so
+    // additional teams must be explicitly non-personal
+    const { data, error } = await supabase
+      .from('teams')
+      .insert({ name: teamName, is_personal: false })
+      .select('id,name,is_personal')
+      .single();
+    if (!error) return data as TeamInfo;
+    // Pre-0002 fallback: no is_personal column
+    const { data: plain, error: plainError } = await supabase
+      .from('teams')
+      .insert({ name: teamName })
+      .select('id,name')
+      .single();
+    if (plainError) throw plainError;
+    return { ...plain, is_personal: false };
+  }
+
+  /**
+   * Which team this session works with: the team that owns the device's
+   * local data when it belongs to this user, else the personal team,
+   * created atomically (0002 RPC) when the account has none.
+   */
+  private async resolveTeam(userId: string): Promise<TeamInfo> {
+    const teams = await this.listTeams();
+    const owner = getDataOwner();
+    if (owner && owner.userId === userId) {
+      const match = teams.find(t => t.id === owner.teamId);
+      if (match) return match;
+    }
+    const personal = teams.find(t => t.is_personal) || teams[0];
+    if (personal) return personal;
+
+    const { data: rpcData, error: rpcError } = await supabase.rpc('get_or_create_personal_team');
+    if (!rpcError && rpcData) {
+      return { id: rpcData as string, name: 'My Team', is_personal: true };
+    }
+    // Pre-0002 fallback (small race window on brand-new accounts; the
+    // migration removes it - see supabase/migrations/0002)
     const { data: created, error: insertError } = await supabase
       .from('teams')
       .insert({ name: 'My Team' })
-      .select('id')
+      .select('id,name')
       .single();
     if (insertError) throw insertError;
-    return created.id;
+    return { ...created, is_personal: true };
   }
 
   private async fetchRemote(): Promise<RemoteRow[]> {
@@ -273,8 +412,11 @@ class SyncService {
         if (fetchError) throw fetchError;
         const row = rows?.[0] ?? null;
         if (row && (!sentDirtyAt || row.updated_at >= sentDirtyAt)) {
-          // Remote edit is newer: it wins; our local change is superseded
+          // Remote edit is newer: it wins; our local change is superseded.
+          // React state must follow - a stale losing version left on screen
+          // would just overwrite the winner on the next edit.
           this.applyRow(key, row.value, row.updated_at);
+          this.notifyRemoteApplied();
           return;
         }
         // Our change is newer (or the row is gone): write unconditionally
@@ -369,9 +511,18 @@ class SyncService {
   async initialSync(userId: string): Promise<'pushLocal' | 'applyRemote'> {
     this.setStatus('syncing');
     try {
+      // Hard guard: the caller (AppContext) resolves account conflicts
+      // through an explicit user choice BEFORE syncing. Never silently
+      // seed one account with another account's local data.
+      if (this.checkAccountConflict(userId)) {
+        throw new Error('This device holds data belonging to a different account');
+      }
       this.userId = userId;
-      this.teamId = await this.ensureTeam();
-      // Switching accounts/teams counts as "never synced here"
+      const team = await this.resolveTeam(userId);
+      this.teamId = team.id;
+      this.teamName = team.name;
+      // Switching teams counts as "never synced here" (per-key state is
+      // team-scoped); dirty flags for the SAME team survive sign-out
       const stored = getMeta();
       if (stored.teamId !== this.teamId) {
         setMeta(meta => {
@@ -381,12 +532,48 @@ class SyncService {
       }
       this.ready = true;
       const applied = await this.reconcile();
+      setDataOwner({ userId, teamId: team.id, teamName: team.name });
       this.setStatus('synced');
       return applied ? 'applyRemote' : 'pushLocal';
     } catch (e) {
       console.error('Initial sync failed:', e);
       this.ready = false;
       this.setStatus('error', e instanceof Error ? e.message : 'Sync failed');
+      throw e;
+    }
+  }
+
+  /**
+   * Switch the device to another of this account's teams. Pending changes
+   * must reach the current team first (or the caller explicitly discards
+   * them); then local data is replaced by the target team's cloud copy.
+   */
+  async switchTeam(team: TeamInfo, opts: { discardPending?: boolean } = {}): Promise<void> {
+    if (!this.userId || !this.ready) throw new Error('Not signed in');
+    if (team.id === this.teamId) return;
+
+    await this.flushDirty();
+    if (this.hasPendingChanges() && !opts.discardPending) {
+      throw new Error("Some changes haven't synced to the current team yet - retry when online");
+    }
+
+    this.setStatus('syncing');
+    try {
+      // Replace, never merge: each team's data stays its own
+      for (const key of [...SYNC_KEYS, ...LEGACY_PULL_KEYS]) {
+        Storage._remove(key);
+      }
+      this.teamId = team.id;
+      this.teamName = team.name;
+      setMeta(meta => {
+        meta.teamId = team.id;
+        meta.keys = {};
+      });
+      await this.reconcile();
+      setDataOwner({ userId: this.userId, teamId: team.id, teamName: team.name });
+      this.setStatus('synced');
+    } catch (e) {
+      this.setStatus('error', e instanceof Error ? e.message : 'Team switch failed');
       throw e;
     }
   }
@@ -456,7 +643,12 @@ class SyncService {
     }
   }
 
-  /** Stop syncing (sign-out). Local data stays on the device. */
+  /**
+   * Stop syncing (sign-out). Local data stays on the device, and so do the
+   * per-key dirty flags and the owner marker: edits that never reached the
+   * server sync on the next sign-in to the SAME account instead of being
+   * silently overwritten by the cloud copy.
+   */
   disable() {
     this.pushTimers.forEach(t => clearTimeout(t));
     this.pushTimers.clear();
@@ -466,9 +658,9 @@ class SyncService {
     }
     this.chains.clear();
     this.teamId = null;
+    this.teamName = null;
     this.userId = null;
     this.ready = false;
-    clearSyncMeta();
     this.setStatus('signedOut');
   }
 }

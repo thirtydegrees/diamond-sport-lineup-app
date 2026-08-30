@@ -42,21 +42,35 @@ Supabase (Settings → Account & Sync):
    `teams` / `team_members` / `team_data` tables with row-level security and
    an atomic get-or-create function so two devices signing into a brand-new
    account can never split it into two teams.
-2. **(Recommended for beta)** *Authentication → Sign In / Providers → Email*:
-   turn **off** "Confirm email" so coaches can sign in immediately after
-   creating an account.
+2. **Keep email confirmation ON** for an external beta (*Authentication →
+   Sign In / Providers → Email*): the app shows a durable "check your email"
+   state with a resend button. Configure the production **Site URL** and
+   allowed redirect URLs (for confirmation and password-reset links), email
+   delivery, and set the **password policy minimum to 8 characters**
+   (*Authentication → Policies*) - the app's client-side validation mirrors
+   that minimum, but Supabase is the authoritative enforcer.
 3. The app ships with the project URL and publishable key baked in (safe:
    access control is enforced server-side by RLS). To point at a different
    Supabase project, set `VITE_SUPABASE_URL` and
    `VITE_SUPABASE_PUBLISHABLE_KEY` at build time.
 
+Teams: one account can run several teams (the 10U team and the 7U team).
+Settings → Account & Sync shows which team the device is working with,
+switches between teams (switching replaces the device's data with that
+team's cloud copy - never merging), and creates new teams. The device
+remembers which account and team its local data belongs to; a different
+account signing in on a shared device must explicitly choose to replace
+the data - it is never uploaded across the account boundary.
+
 Sync model: per-key reconciliation. Each storage key tracks its own local
 dirty state and the server timestamp it last saw, so a change to one key
 can never overwrite another; cleared values propagate as null tombstones;
 writes are serialized per key, retried on failure, and bound to the signed-
-in identity. A true both-sides-changed conflict resolves last-write-wins
-for that key only. Changes push automatically (debounced) and every app
-launch pulls.
+in identity. Dirty flags survive sign-out, so offline edits sync on the
+next sign-in to the same account instead of being lost. A true
+both-sides-changed conflict resolves last-write-wins for that key only,
+and React state reloads whenever a remote winner is applied. Changes push
+automatically (debounced) and every app launch pulls.
 
 ## Deploying (Vercel)
 
@@ -105,6 +119,9 @@ P ⅓ + 1B ⅔. Only *completed* games feed history, season stats, and rest
 eligibility — drafts, live games, and abandoned games contribute nothing.
 Games completed before out tracking existed are migrated as *estimated*
 participation (three outs per planned inning) and labeled as such.
+Recorded participation stays correctable: History → Fix Participation
+edits, inserts, or deletes out snapshots, and everything derived
+(fairness, innings pitched, eligibility) recomputes from the ledger.
 
 ### Pitching rules
 
@@ -114,10 +131,14 @@ PONY, plus softball no-limit and innings-based schemes) live in
 types: pitch-count breakpoints, innings-pitched breakpoints, or none.
 
 The in-game counter keeps a **working** count (correctable directly). At
-game completion the coach must review and confirm every pitcher's final
-total — or mark it unknown, which is never treated as zero: eligibility
-turns conservative ("count needed") until the count is corrected from
-History. All eligibility flows through one policy module
+game completion every pitcher must be **explicitly reviewed** - the
+working count is offered for one-tap confirmation, but an untouched
+prefill is never accepted (the domain layer rejects unreviewed
+completions). Confirming a zero for a player who actually pitched takes a
+deliberate acknowledgment, and "no count can be established" is an
+exceptional path with its own acknowledgment - never treated as zero:
+eligibility assumes the maximum applicable rest until the count is
+corrected from History. All eligibility flows through one policy module
 (`src/domain/pitching.ts`): pregame rest from prior completed games
 (same-day outings aggregated), daily pitch max, and per-game caps — every
 assignment path (solver, pickers, live changes) warns through it, and

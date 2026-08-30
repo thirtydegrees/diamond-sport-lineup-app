@@ -10,17 +10,21 @@
    ============================================ */
 
 import React from 'react';
-import { getPositionColorClass } from '../domain/constants';
+import { getFieldingPositions, getPositionColorClass } from '../domain/constants';
 import { compareDatesDesc, formatDateDisplay } from '../domain/dates';
 import {
   correctConfirmedPitches,
+  deleteOutAt,
+  editOutAssignments,
   formatOutsAsInnings,
   getPitchCountEntry,
+  insertOutAfter,
   participationByPlayer,
-  pitchingOutsByPlayer
+  pitchingOutsByPlayer,
+  validateFormation
 } from '../domain/games';
 import { AppContext } from '../state/AppContext';
-import { ConfirmDialog, EmptyState } from '../components/ui';
+import { ConfirmDialog, EmptyState, Modal } from '../components/ui';
 
 /** Read-only snapshot of a saved game's planned lineup grid. */
 function GameLineupSnapshot({ game, playerName }) {
@@ -170,7 +174,150 @@ function PitchCountRow({ game, playerId, playerName, onCorrect }) {
   );
 }
 
-function GameDetail({ game, playerName, onDelete, onCorrectPitches }) {
+/* ============================================
+   Participation editor
+
+   Game-day entry mistakes are expected: a missed out, a wrong
+   formation, a substitution recorded late. The out ledger stays
+   the single source of truth, so corrections replace snapshots
+   directly and every derived number (fairness, innings pitched,
+   eligibility) recomputes automatically.
+   ============================================ */
+
+function OutFormationEditor({ game, out, playerName, onSave, onClose }) {
+  const positions = getFieldingPositions(game.fielderCount);
+  const playerIds = [...new Set([
+    ...(game.battingOrder || []),
+    ...Object.keys(out.assignments)
+  ])];
+  const [assignments, setAssignments] = React.useState({ ...out.assignments });
+
+  const issues = validateFormation(assignments, Object.keys(assignments), game.fielderCount)
+    .filter(i => i.type === 'duplicate' || i.type === 'vacant');
+
+  return (
+    <Modal
+      title={`Inning ${out.inning} · Out ${out.outInInning}`}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" onClick={() => onSave(assignments)}>
+            Save Correction
+          </button>
+        </>
+      }
+    >
+      <p className="text-muted text-small mb-md">
+        Set where each player actually was when this out was recorded.
+      </p>
+      {playerIds.map(pid => (
+        <div key={pid} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '4px 0' }}>
+          <span className="text-small" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {playerName(pid)}
+          </span>
+          <select
+            className="form-select"
+            style={{ width: '110px', padding: '4px 8px' }}
+            value={assignments[pid] || 'OUT'}
+            onChange={(e) => {
+              const val = e.target.value;
+              setAssignments(prev => {
+                const next = { ...prev };
+                if (val === 'OUT') delete next[pid];
+                else next[pid] = val;
+                return next;
+              });
+            }}
+            aria-label={`Position for ${playerName(pid)}`}
+          >
+            {positions.map(pos => <option key={pos} value={pos}>{pos}</option>)}
+            <option value="SIT">Bench</option>
+            <option value="OUT">Not present</option>
+          </select>
+        </div>
+      ))}
+      {issues.length > 0 && (
+        <p className="text-small" style={{ color: 'var(--warning)', marginTop: '8px' }}>
+          {issues.map(i => i.message).join(' · ')}
+        </p>
+      )}
+    </Modal>
+  );
+}
+
+function ParticipationEditor({ game, playerName, onChange }) {
+  const [editSeq, setEditSeq] = React.useState(null);
+  const [deleteSeq, setDeleteSeq] = React.useState(null);
+
+  const editingOut = editSeq != null ? game.outs.find(o => o.seq === editSeq) : null;
+
+  const summarize = (out) => {
+    const p = Object.entries(out.assignments).find(([, pos]) => pos === 'P');
+    const sits = Object.values(out.assignments).filter(pos => pos === 'SIT').length;
+    return `P: ${p ? playerName(p[0]).split(' ')[0] : '—'} · bench ${sits}`;
+  };
+
+  return (
+    <div style={{ marginTop: 'var(--space-sm)' }}>
+      {game.outs.map(out => (
+        <div
+          key={out.seq}
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '4px 0', borderBottom: '1px solid var(--border-light)' }}
+        >
+          <span className="text-small" style={{ flex: 1 }}>
+            <strong>Inn {out.inning} · out {out.outInInning}</strong>
+            <span className="text-muted"> {summarize(out)}{out.estimated ? ' (est.)' : ''}</span>
+          </span>
+          <button className="btn btn-sm btn-secondary" onClick={() => setEditSeq(out.seq)} title="Correct this out's formation">
+            ✏️
+          </button>
+          <button
+            className="btn btn-sm btn-secondary"
+            onClick={() => onChange(insertOutAfter(game, out.seq))}
+            title="Insert a missed out after this one (same defense; edit it after)"
+          >
+            +
+          </button>
+          <button className="btn btn-sm btn-ghost" onClick={() => setDeleteSeq(out.seq)} title="Delete this out">
+            🗑
+          </button>
+        </div>
+      ))}
+      <p className="form-hint" style={{ marginTop: '6px' }}>
+        Outs stay in order, three per inning - inserting or deleting renumbers
+        the rest. All stats and eligibility recompute from the corrected ledger.
+      </p>
+
+      {editingOut && (
+        <OutFormationEditor
+          game={game}
+          out={editingOut}
+          playerName={playerName}
+          onSave={(assignments) => {
+            onChange(editOutAssignments(game, editingOut.seq, assignments));
+            setEditSeq(null);
+          }}
+          onClose={() => setEditSeq(null)}
+        />
+      )}
+
+      {deleteSeq != null && (
+        <ConfirmDialog
+          title="Delete This Out"
+          message="Remove this recorded out? Later outs shift up to fill the gap, and all participation and pitching numbers recompute."
+          confirmLabel="Delete Out"
+          danger
+          onConfirm={() => { onChange(deleteOutAt(game, deleteSeq)); setDeleteSeq(null); }}
+          onCancel={() => setDeleteSeq(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+function GameDetail({ game, playerName, onDelete, onCorrectPitches, onUpdateGame }) {
+  const [editParticipation, setEditParticipation] = React.useState(false);
   const pitcherIds = new Set([
     ...Object.keys(pitchingOutsByPlayer(game)),
     ...Object.entries(game.pitchCounts || {})
@@ -191,8 +338,19 @@ function GameDetail({ game, playerName, onDelete, onCorrectPitches }) {
         </p>
       )}
 
-      <div className="text-muted text-small" style={{ marginBottom: '4px' }}>Actual playing time</div>
-      <ParticipationSummary game={game} playerName={playerName} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+        <span className="text-muted text-small" style={{ flex: 1 }}>Actual playing time</span>
+        {game.outs?.length > 0 && (
+          <button className="btn btn-sm btn-secondary" onClick={() => setEditParticipation(v => !v)}>
+            {editParticipation ? 'Done Editing' : '✏️ Fix Participation'}
+          </button>
+        )}
+      </div>
+      {editParticipation ? (
+        <ParticipationEditor game={game} playerName={playerName} onChange={onUpdateGame} />
+      ) : (
+        <ParticipationSummary game={game} playerName={playerName} />
+      )}
 
       {pitcherIds.size > 0 && (
         <div style={{ marginTop: 'var(--space-md)' }}>
@@ -245,6 +403,10 @@ export function HistoryView() {
   const handleCorrectPitches = (gameId) => (playerId, pitches) => {
     setGames(games.map(g => (g.id === gameId ? correctConfirmedPitches(g, playerId, pitches) : g)));
     showToast('Pitch count corrected - eligibility now uses the new total');
+  };
+
+  const handleUpdateGame = (updated) => {
+    setGames(games.map(g => (g.id === updated.id ? updated : g)));
   };
 
   return (
@@ -312,6 +474,7 @@ export function HistoryView() {
                       playerName={makePlayerName(g)}
                       onDelete={() => setDeleteTarget(g)}
                       onCorrectPitches={handleCorrectPitches(g.id)}
+                      onUpdateGame={handleUpdateGame}
                     />
                   )}
                 </div>

@@ -93,11 +93,56 @@ function validateGameShape(raw: unknown, index: number): void {
   }
 }
 
+const VALID_ASSIGNMENTS = new Set(['P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF', 'SC', 'SIT']);
+
 function checkV2Game(game: Game, index: number): Game {
-  if (!Array.isArray(game.outs)) throw new BackupError(`game #${index + 1} has malformed outs`);
-  if (!isRecord(game.pitchCounts)) throw new BackupError(`game #${index + 1} has malformed pitch counts`);
+  const label = `game #${index + 1}`;
+  if (!Array.isArray(game.outs)) throw new BackupError(`${label} has malformed outs`);
+  if (!isRecord(game.pitchCounts)) throw new BackupError(`${label} has malformed pitch counts`);
   if (!['draft', 'live', 'completed'].includes(game.status)) {
-    throw new BackupError(`game #${index + 1} has an unknown status`);
+    throw new BackupError(`${label} has an unknown status`);
+  }
+
+  for (const out of game.outs) {
+    if (!isRecord(out)) throw new BackupError(`${label} has a malformed out entry`);
+    if (typeof out.inning !== 'number' || out.inning < 1) {
+      throw new BackupError(`${label} has an out with an invalid inning`);
+    }
+    if (![1, 2, 3].includes(out.outInInning)) {
+      throw new BackupError(`${label} has an out with an invalid out number`);
+    }
+    if (!isRecord(out.assignments)) {
+      throw new BackupError(`${label} has an out without assignments`);
+    }
+    for (const [pid, pos] of Object.entries(out.assignments)) {
+      if (typeof pid !== 'string' || !VALID_ASSIGNMENTS.has(pos as string)) {
+        throw new BackupError(`${label} has an out with an invalid assignment (${String(pos)})`);
+      }
+    }
+  }
+
+  for (const [pid, entry] of Object.entries(game.pitchCounts)) {
+    if (typeof pid !== 'string' || !isRecord(entry)) {
+      throw new BackupError(`${label} has a malformed pitch-count entry`);
+    }
+    if (typeof entry.live !== 'number' || entry.live < 0) {
+      throw new BackupError(`${label} has an invalid working pitch count`);
+    }
+    if (entry.confirmed !== null && (typeof entry.confirmed !== 'number' || entry.confirmed < 0)) {
+      throw new BackupError(`${label} has an invalid confirmed pitch count`);
+    }
+    if (!['live', 'confirmed', 'unknown'].includes(entry.status as string)) {
+      throw new BackupError(`${label} has an invalid pitch-count status`);
+    }
+    if (entry.byInning !== undefined && !isRecord(entry.byInning)) {
+      throw new BackupError(`${label} has malformed per-inning pitch counts`);
+    }
+  }
+
+  if (game.live !== null && game.live !== undefined) {
+    if (!isRecord(game.live) || !isRecord(game.live.assignments) || typeof game.live.inning !== 'number') {
+      throw new BackupError(`${label} has malformed live state`);
+    }
   }
   return game;
 }

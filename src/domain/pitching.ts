@@ -18,8 +18,8 @@
    ============================================ */
 
 import { compareDatesDesc, daysBetween } from './dates';
-import { pitchingOutsByPlayer, getPitchCountEntry, formatOutsAsInnings, OUTS_PER_INNING } from './games';
-import type { Game, PitchRules, PitcherEligibility, PitchingOuting, Player } from './types';
+import { participationByPlayer, pitchingOutsByPlayer, getPitchCountEntry, formatOutsAsInnings, OUTS_PER_INNING } from './games';
+import type { Assignment, Game, PitchRules, PitcherEligibility, PitchingOuting, Player } from './types';
 
 /** Derive pitching outings from completed games. Never stored (H8). */
 export function deriveOutings(games: Game[]): PitchingOuting[] {
@@ -252,6 +252,140 @@ export function assessPitcherAssignment(
   }
 
   return { allowed: true, warnings };
+}
+
+/**
+ * P/C safety-rule warnings for putting `player` at `position`, based on what
+ * ACTUALLY happened in this game (recorded outs + the live formation), not
+ * just the plan's inning adjacency. Baseball only (softball passes `false`).
+ *
+ * Simplified conservatively from Pitch Smart: a player who has pitched in
+ * this game should not move behind the plate, and a player who has caught
+ * should not take the mound.
+ */
+export function pcTransitionWarnings(
+  player: Player,
+  position: Assignment,
+  game: Game,
+  enforce: boolean
+): AssignmentWarning[] {
+  if (!enforce || (position !== 'P' && position !== 'C')) return [];
+  const parts = participationByPlayer(game)[player.id] || {};
+  const liveNow = game.live?.assignments?.[player.id];
+  const pitched = (parts.P || 0) > 0 || liveNow === 'P';
+  const caught = (parts.C || 0) > 0 || liveNow === 'C';
+  if (position === 'C' && pitched) {
+    return [{
+      severity: 'warn',
+      message: `${player.name} has pitched in this game - moving to catcher violates the pitcher/catcher safety rule`,
+      short: 'Pitched this game'
+    }];
+  }
+  if (position === 'P' && caught) {
+    return [{
+      severity: 'warn',
+      message: `${player.name} has caught in this game - taking the mound violates the pitcher/catcher safety rule`,
+      short: 'Caught this game'
+    }];
+  }
+  return [];
+}
+
+export interface PositionChangeContext {
+  /** Baseball P/C safety rule applies (false for softball). */
+  enforcePitcherCatcherRule: boolean;
+  /** True for live-formation changes: reality stays recordable, so even a
+      capability problem is a warning, never a hard block. */
+  live: boolean;
+}
+
+/**
+ * THE single gate for putting `player` at `position` in this game - used by
+ * the pitcher picker, plan swaps (mover AND displaced player), bench entry,
+ * and live formation chips. Returns every applicable warning; an empty list
+ * means no override is needed.
+ */
+export function assessPositionChange(
+  player: Player,
+  position: Assignment,
+  game: Game,
+  games: Game[],
+  rules: PitchRules,
+  ctx: PositionChangeContext
+): AssignmentWarning[] {
+  if (position === 'SIT') return [];
+  const warnings: AssignmentWarning[] = [];
+
+  if (position === 'P') {
+    const decision = assessPitcherAssignment(player, game, games, rules);
+    for (const w of decision.warnings) {
+      warnings.push(ctx.live ? { ...w, severity: 'warn' } : w);
+    }
+  } else if (position === 'C' && !player.canCatch) {
+    warnings.push({
+      severity: ctx.live ? 'warn' : 'block',
+      message: `${player.name} is not marked as able to catch`,
+      short: 'Not a catcher'
+    });
+  }
+
+  if (position !== 'P' && position !== 'C' && player.positions?.[position] === 'avoid') {
+    warnings.push({
+      severity: 'warn',
+      message: `${player.name} has ${position} marked as Avoid`,
+      short: 'Avoided position'
+    });
+  }
+
+  warnings.push(...pcTransitionWarnings(player, position, game, ctx.enforcePitcherCatcherRule));
+  return warnings;
+}
+
+/**
+ * Continuation checkpoint: warnings that recording `outsToRecord` more outs
+ * with the CURRENT pitcher would cross (or has crossed) a workload boundary.
+ * The out is always recordable - the app warns once at the boundary so the
+ * coach makes the pitching change knowingly, not accidentally.
+ */
+export function capCrossingWarnings(
+  game: Game,
+  games: Game[],
+  rawRules: PitchRules,
+  outsToRecord: number
+): AssignmentWarning[] {
+  const rules = normalizePitchRules(rawRules);
+  const pitcherId = game.live
+    ? Object.keys(game.live.assignments).find(id => game.live!.assignments[id] === 'P')
+    : undefined;
+  if (!pitcherId) return [];
+  const warnings: AssignmentWarning[] = [];
+
+  if (rules.maxInningsPerGame != null) {
+    const capOuts = rules.maxInningsPerGame * OUTS_PER_INNING;
+    const current = pitchingOutsByPlayer(game)[pitcherId] || 0;
+    // Reaching the cap exactly is legal; going past it (from at or below)
+    // is what needs the coach's explicit go-ahead
+    if (current + outsToRecord > capOuts) {
+      warnings.push({
+        severity: 'warn',
+        message: `This out puts the current pitcher past the ${rules.maxInningsPerGame}-inning game cap (${formatOutsAsInnings(current)} pitched so far)`,
+        short: 'Crosses game cap'
+      });
+    }
+  }
+
+  if (rules.limitType === 'pitches' && rules.absoluteMax > 0) {
+    const today = dailyPitchTotal(pitcherId, game, games);
+    if (today.total >= rules.absoluteMax) {
+      warnings.push({
+        severity: 'warn',
+        message: `The current pitcher is at ${today.total} pitches today (max ${rules.absoluteMax}) - consider a pitching change`,
+        short: 'Over daily max'
+      });
+    }
+  }
+
+  return warnings;
 }
 
 /**
