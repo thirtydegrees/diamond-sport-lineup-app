@@ -1,28 +1,30 @@
 /* ============================================
    Diamond Lineup - Storage Service
 
-   Abstraction layer for data persistence.
-   Currently uses localStorage, but designed to be
-   swapped for an API/sync backend (Phase 2).
+   Abstraction layer over localStorage. All persistence goes
+   through this service; cloud sync mirrors these keys.
 
-   All storage operations go through this service.
+   v2: games carry their own out ledgers and pitch-count state.
+   Legacy v1 blobs (from old devices, cloud rows, or backups)
+   are migrated on read, so every caller always sees v2 games.
+   The old pitchHistory collection is migration input only -
+   pitching workload is derived from completed games.
    ============================================ */
 
 import { DEFAULT_SETTINGS } from '../domain/constants';
-import { compareDatesDesc, daysBetween } from '../domain/dates';
-import { newId } from '../domain/ids';
-import type { Game, PitchRecord, PitcherEligibility, Player, Settings } from '../domain/types';
+import { compareDatesDesc } from '../domain/dates';
+import { normalizePitchRules } from '../domain/pitching';
+import type { Game, PitchRecord, Player, Settings } from '../domain/types';
+import { isV2Game, migrateCurrentGameV1, migrateSavedGameV1 } from './migrate';
 
 const STORAGE_PREFIX = 'ybl_';
 
-export interface ExportedData {
+export interface DataSet {
   roster: Player[];
   settings: Settings;
   currentGame: Game | null;
   games: Game[];
-  pitchHistory: PitchRecord[];
   defaultBattingOrder: string[] | null;
-  exportDate: string;
 }
 
 export const StorageKeys = {
@@ -30,7 +32,7 @@ export const StorageKeys = {
   SETTINGS: 'settings',
   CURRENT_GAME: 'currentGame',
   GAMES: 'games',
-  PITCH_HISTORY: 'pitchHistory',
+  PITCH_HISTORY: 'pitchHistory', // legacy, read for migration only
   DEFAULT_BATTING_ORDER: 'defaultBattingOrder'
 } as const;
 
@@ -71,7 +73,7 @@ export const Storage = {
   },
 
   // ----------------------------------------
-  // Roster operations
+  // Roster
   // ----------------------------------------
 
   getRoster(): Player[] {
@@ -83,12 +85,14 @@ export const Storage = {
   },
 
   // ----------------------------------------
-  // Settings operations
+  // Settings
   // ----------------------------------------
 
   getSettings(): Settings {
     const saved = this._get<Partial<Settings>>(StorageKeys.SETTINGS, {});
-    // Merge with defaults so fields added in later versions exist
+    // Merge with defaults so fields added in later versions exist, and
+    // normalize pitch rules so malformed custom input can't corrupt
+    // eligibility math (unsorted breakpoints, negative values).
     return {
       ...DEFAULT_SETTINGS,
       ...saved,
@@ -96,15 +100,18 @@ export const Storage = {
         ...DEFAULT_SETTINGS.fairness,
         ...(saved.fairness || {})
       },
-      pitchRules: {
+      pitchRules: normalizePitchRules({
         ...DEFAULT_SETTINGS.pitchRules,
         ...(saved.pitchRules || {})
-      }
+      })
     };
   },
 
   saveSettings(settings: Settings): boolean {
-    return this._set(StorageKeys.SETTINGS, settings);
+    return this._set(StorageKeys.SETTINGS, {
+      ...settings,
+      pitchRules: normalizePitchRules(settings.pitchRules)
+    });
   },
 
   // ----------------------------------------
@@ -115,20 +122,22 @@ export const Storage = {
     return this._get<string[] | null>(StorageKeys.DEFAULT_BATTING_ORDER, null);
   },
 
-  saveDefaultBattingOrder(order: string[]): boolean {
+  saveDefaultBattingOrder(order: string[] | null): boolean {
+    if (order === null) return this._remove(StorageKeys.DEFAULT_BATTING_ORDER);
     return this._set(StorageKeys.DEFAULT_BATTING_ORDER, order);
   },
 
-  clearDefaultBattingOrder(): boolean {
-    return this._remove(StorageKeys.DEFAULT_BATTING_ORDER);
-  },
-
   // ----------------------------------------
-  // Current game operations
+  // Current (draft/live) game
   // ----------------------------------------
 
   getCurrentGame(): Game | null {
-    return this._get<Game | null>(StorageKeys.CURRENT_GAME, null);
+    const raw = this._get<unknown>(StorageKeys.CURRENT_GAME, null);
+    if (raw === null) return null;
+    if (isV2Game(raw)) return raw;
+    const migrated = migrateCurrentGameV1(raw, this.getRoster());
+    this._set(StorageKeys.CURRENT_GAME, migrated);
+    return migrated;
   },
 
   saveCurrentGame(game: Game | null): boolean {
@@ -140,11 +149,19 @@ export const Storage = {
   },
 
   // ----------------------------------------
-  // Game history operations
+  // Completed game history
   // ----------------------------------------
 
   getGames(): Game[] {
-    return this._get<Game[]>(StorageKeys.GAMES, []);
+    const raw = this._get<unknown[]>(StorageKeys.GAMES, []);
+    if (raw.every(isV2Game)) return raw as Game[];
+    // Legacy blob (local v1 data, an old backup, or an old cloud row):
+    // migrate every game and write the result back once.
+    const pitchHistory = this.getLegacyPitchHistory();
+    const roster = this.getRoster();
+    const migrated = raw.map(g => (isV2Game(g) ? g : migrateSavedGameV1(g, pitchHistory, roster)));
+    this._set(StorageKeys.GAMES, migrated);
+    return migrated;
   },
 
   saveGames(games: Game[]): boolean {
@@ -167,13 +184,12 @@ export const Storage = {
   },
 
   deleteGame(gameId: string): boolean {
-    // Purge the game's pitch records too - otherwise the deleted game's
-    // workload would still drive rest eligibility and season stats
-    this.savePitchHistory(this.getPitchHistory().filter(r => r.gameId !== gameId));
+    // v2: pitching workload is derived from the games list, so removing the
+    // game removes its workload with it - no separate records to purge.
     return this.saveGames(this.getGames().filter(g => g.id !== gameId));
   },
 
-  /** Most recent game (for "use last game's lineup"). */
+  /** Most recent completed game (for "use last game's lineup"). */
   getLastGame(): Game | null {
     const games = this.getGames();
     if (games.length === 0) return null;
@@ -182,72 +198,11 @@ export const Storage = {
   },
 
   // ----------------------------------------
-  // Pitch history operations
+  // Legacy pitch history (migration input only)
   // ----------------------------------------
 
-  getPitchHistory(): PitchRecord[] {
+  getLegacyPitchHistory(): PitchRecord[] {
     return this._get<PitchRecord[]>(StorageKeys.PITCH_HISTORY, []);
-  },
-
-  savePitchHistory(history: PitchRecord[]): boolean {
-    return this._set(StorageKeys.PITCH_HISTORY, history);
-  },
-
-  addPitchRecord(record: Omit<PitchRecord, 'id'> & { id?: string }): boolean {
-    const history = this.getPitchHistory();
-    const existingIndex = history.findIndex(
-      r => r.playerId === record.playerId && r.gameId === record.gameId
-    );
-    if (existingIndex >= 0) {
-      // Keep the existing id - `record.id` may be absent
-      history[existingIndex] = { ...history[existingIndex], ...record, id: history[existingIndex].id };
-    } else {
-      history.push({
-        ...record,
-        id: record.id ?? newId()
-      });
-    }
-    return this.savePitchHistory(history);
-  },
-
-  getPitchHistoryForPlayer(playerId: string): PitchRecord[] {
-    return this.getPitchHistory().filter(r => r.playerId === playerId);
-  },
-
-  /**
-   * Record pitching workload from a game's lineup. Called on game save so
-   * innings-pitched is tracked even when the pitch counter was never opened
-   * (softball leagues usually track innings, not pitches).
-   */
-  recordGamePitching(game: Game): boolean {
-    const inningsByPlayer: Record<string, number> = {};
-    for (const [key, pos] of Object.entries(game.lineup || {})) {
-      if (pos !== 'P') continue;
-      const playerId = key.slice(0, key.lastIndexOf('-'));
-      inningsByPlayer[playerId] = (inningsByPlayer[playerId] || 0) + 1;
-    }
-
-    let ok = true;
-    for (const [playerId, inningsPitched] of Object.entries(inningsByPlayer)) {
-      const pitchLog = game.pitchLog?.[playerId] || {};
-      const pitches = Object.values(pitchLog).reduce((a, b) => a + b, 0);
-      ok = this.addPitchRecord({
-        playerId,
-        gameId: game.id,
-        date: game.date,
-        pitches,
-        innings: pitchLog,
-        inningsPitched
-      }) && ok;
-    }
-    return ok;
-  },
-
-  /** Pitcher eligibility for a game date based on rest rules. */
-  getPitcherEligibility(playerId: string, gameDate: string): PitcherEligibility {
-    const history = this.getPitchHistoryForPlayer(playerId);
-    const settings = this.getSettings();
-    return computePitcherEligibility(history, settings.pitchRules, gameDate);
   },
 
   // ----------------------------------------
@@ -261,102 +216,67 @@ export const Storage = {
     return true;
   },
 
-  /** Export all data (for backup or migration). */
-  exportAllData(): ExportedData {
+  /** Current dataset (backup export and sync snapshots). */
+  exportDataSet(): DataSet {
     return {
       roster: this.getRoster(),
       settings: this.getSettings(),
       currentGame: this.getCurrentGame(),
       games: this.getGames(),
-      pitchHistory: this.getPitchHistory(),
-      defaultBattingOrder: this.getDefaultBattingOrder(),
-      exportDate: new Date().toISOString()
+      defaultBattingOrder: this.getDefaultBattingOrder()
     };
   },
 
-  /** Import data (for restore or migration). */
-  importAllData(data: Partial<ExportedData>): boolean {
+  /**
+   * Replace the full dataset. Explicit nulls CLEAR their key (a cleared
+   * current game or batting order must not resurrect). Every write result
+   * is checked; on any failure the previous values are restored so a
+   * half-applied import can't corrupt the device (H11).
+   */
+  importDataSet(data: DataSet): boolean {
+    const backupRaw: Record<string, string | null> = {};
+    const keys = [
+      StorageKeys.ROSTER,
+      StorageKeys.SETTINGS,
+      StorageKeys.CURRENT_GAME,
+      StorageKeys.GAMES,
+      StorageKeys.DEFAULT_BATTING_ORDER
+    ];
     try {
-      if (data.roster) this.saveRoster(data.roster);
-      if (data.settings) this.saveSettings(data.settings);
-      if (data.currentGame) this.saveCurrentGame(data.currentGame);
-      if (data.games) this.saveGames(data.games);
-      if (data.pitchHistory) this.savePitchHistory(data.pitchHistory);
-      if (data.defaultBattingOrder) this.saveDefaultBattingOrder(data.defaultBattingOrder);
-      return true;
-    } catch (e) {
-      console.error('Import error:', e);
+      for (const key of keys) {
+        backupRaw[key] = localStorage.getItem(STORAGE_PREFIX + key);
+      }
+    } catch {
       return false;
     }
+
+    const writes: [string, unknown][] = [
+      [StorageKeys.ROSTER, data.roster],
+      [StorageKeys.SETTINGS, data.settings],
+      [StorageKeys.CURRENT_GAME, data.currentGame],
+      [StorageKeys.GAMES, data.games],
+      [StorageKeys.DEFAULT_BATTING_ORDER, data.defaultBattingOrder]
+    ];
+
+    let ok = true;
+    for (const [key, value] of writes) {
+      if (value === null) ok = this._remove(key) && ok;
+      else ok = this._set(key, value) && ok;
+      if (!ok) break;
+    }
+
+    if (!ok) {
+      // Roll back to the pre-import state
+      for (const [key, raw] of Object.entries(backupRaw)) {
+        try {
+          if (raw === null) localStorage.removeItem(STORAGE_PREFIX + key);
+          else localStorage.setItem(STORAGE_PREFIX + key, raw);
+        } catch {
+          // Rollback is best-effort under storage failure
+        }
+      }
+      return false;
+    }
+    return true;
   }
 };
-
-/**
- * Pure eligibility calculation, separated from storage so it can be
- * unit-tested and later reused server-side.
- */
-export function computePitcherEligibility(
-  history: PitchRecord[],
-  rules: Settings['pitchRules'],
-  gameDate: string
-): PitcherEligibility {
-  if (rules.limitType === 'none' || history.length === 0) {
-    return { eligible: true, reason: 'Eligible', daysRest: null };
-  }
-
-  const sorted = [...history].sort((a, b) => compareDatesDesc(a.date, b.date));
-  const lastOuting = sorted[0];
-  const lastInningsPitched = lastOuting.inningsPitched
-    ?? Object.keys(lastOuting.innings || {}).length;
-
-  const daysSince = daysBetween(lastOuting.date, gameDate);
-
-  // Find required rest days from the breakpoint table for the active scheme
-  let requiredRest = 0;
-  if (rules.limitType === 'innings') {
-    let matched = false;
-    for (const bp of rules.inningsBreakpoints) {
-      if (lastInningsPitched <= bp.maxInnings) {
-        requiredRest = bp.restDays;
-        matched = true;
-        break;
-      }
-    }
-    // Beyond the highest breakpoint: use the last breakpoint's rest
-    if (!matched && rules.inningsBreakpoints.length > 0) {
-      requiredRest = rules.inningsBreakpoints[rules.inningsBreakpoints.length - 1].restDays;
-    }
-  } else {
-    for (const bp of rules.breakpoints) {
-      if (lastOuting.pitches <= bp.maxPitches) {
-        requiredRest = bp.restDays;
-        break;
-      }
-    }
-    // Check if exceeded all breakpoints
-    const lastBreakpoint = rules.breakpoints[rules.breakpoints.length - 1];
-    if (lastBreakpoint && lastOuting.pitches > lastBreakpoint.maxPitches) {
-      requiredRest = rules.absoluteMaxRest;
-    }
-  }
-
-  if (daysSince >= requiredRest) {
-    return {
-      eligible: true,
-      reason: 'Eligible',
-      daysRest: daysSince,
-      lastPitched: lastOuting.pitches,
-      lastInningsPitched
-    };
-  }
-
-  const daysNeeded = requiredRest - daysSince;
-  return {
-    eligible: false,
-    reason: `${daysNeeded}d rest`,
-    daysRest: daysSince,
-    daysNeeded,
-    lastPitched: lastOuting.pitches,
-    lastInningsPitched
-  };
-}

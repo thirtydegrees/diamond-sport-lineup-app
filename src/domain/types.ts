@@ -75,7 +75,54 @@ export interface Settings {
 /** Keys are `${playerId}-${inning}`. */
 export type LineupMap = Record<string, Assignment>;
 
+/**
+ * Game lifecycle. The plan (lineup grid) never becomes history by itself:
+ * - draft:     setup + planning; produces no stats or workload
+ * - live:      out tracking is running; actual participation accrues in `outs`
+ * - completed: finalized; the ONLY status that feeds stats, workload, and rest
+ */
+export type GameStatus = 'draft' | 'live' | 'completed';
+
+/**
+ * One recorded defensive out: a snapshot of who was standing where when the
+ * out happened. Actual participation is derived exclusively from these.
+ */
+export interface DefensiveOut {
+  seq: number; // 1..N across the whole game
+  inning: number; // 1-based
+  outInInning: 1 | 2 | 3;
+  /** playerId -> position or SIT for every player active at that moment. */
+  assignments: Record<string, Assignment>;
+  /** True when expanded from a legacy inning-level game (not tap-recorded). */
+  estimated?: boolean;
+}
+
+/**
+ * Per-player pitch count state for one game.
+ * - live: the working in-game count (coach may miss pitches)
+ * - confirmed: the authoritative total, set when the coach confirms at game
+ *   completion (or corrects later from history)
+ * - unknown: player pitched but no trustworthy total exists; NEVER treated
+ *   as zero - eligibility becomes conservative until corrected
+ */
+export interface PitchCountEntry {
+  live: number;
+  byInning: Record<number, number>;
+  confirmed: number | null;
+  status: 'live' | 'confirmed' | 'unknown';
+}
+
+export interface LiveGameState {
+  /** Current defensive inning (1-based). */
+  inning: number;
+  /** Outs already recorded in the current inning (0-2). */
+  outsRecorded: number;
+  /** The formation currently on the field: playerId -> position/SIT. */
+  assignments: Record<string, Assignment>;
+}
+
 export interface Game {
+  schemaVersion: 2;
   id: string;
   date: string; // YYYY-MM-DD (local calendar date, no time component)
   opponent: string;
@@ -84,25 +131,53 @@ export interface Game {
   fielderCount: FielderCount;
   battingOrder: string[];
   availability: Record<string, boolean>;
+  /** PLAN: intended pitcher per inning. */
   pitcherAssignments: Record<number, string>;
+  /** PLAN: coach-locked cells. */
   lockedCells: LineupMap;
+  /** PLAN: the inning-level lineup grid. Never counted as participation. */
   lineup: LineupMap;
   score: { us: Record<number, number>; them: Record<number, number> };
-  pitchLog: Record<string, Record<number, number>>;
-  currentInning: number;
+  status: GameStatus;
+  /** Live out-tracking state; null unless status is 'live'. */
+  live: LiveGameState | null;
+  /** ACTUAL: append-only ledger of recorded defensive outs. */
+  outs: DefensiveOut[];
+  /** ACTUAL: per-player pitch counts (independent of outs). */
+  pitchCounts: Record<string, PitchCountEntry>;
+  /** Name snapshots so history survives roster removals. */
+  playerNames: Record<string, string>;
   exitedPlayers: Record<string, number>;
+  completedAt?: string;
+  /** 'estimated' for games migrated from the inning-level v1 model. */
+  participationQuality?: 'exact' | 'estimated';
 }
 
+/** Legacy (v1) pitch record shape - only used during migration. */
 export interface PitchRecord {
   id: string;
   playerId: string;
   gameId: string;
   date: string; // YYYY-MM-DD
   pitches: number;
-  /** Pitch counts per inning (from the pitch counter, if used). */
   innings: Record<number, number>;
-  /** Innings pitched in the game (derived from the lineup on save). */
   inningsPitched?: number;
+}
+
+/**
+ * A pitcher's workload in one completed game, derived from the game's out
+ * ledger and confirmed pitch counts. Never stored - always recomputed.
+ */
+export interface PitchingOuting {
+  gameId: string;
+  playerId: string;
+  date: string;
+  /** Confirmed pitch total, or null when the count is unknown. */
+  pitches: number | null;
+  countStatus: 'confirmed' | 'unknown';
+  pitchingOuts: number;
+  /** True when the outs were estimated from a legacy inning-level game. */
+  estimated: boolean;
 }
 
 export interface PitcherEligibility {
@@ -110,6 +185,8 @@ export interface PitcherEligibility {
   reason: string;
   daysRest: number | null;
   daysNeeded?: number;
-  lastPitched?: number;
+  lastPitched?: number | null;
   lastInningsPitched?: number;
+  /** True when an unknown pitch count forced a conservative answer. */
+  needsCount?: boolean;
 }

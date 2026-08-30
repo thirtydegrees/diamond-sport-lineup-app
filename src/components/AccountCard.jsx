@@ -4,6 +4,7 @@
 
 import React from 'react';
 import { AppContext } from '../state/AppContext';
+import { Sync } from '../services/sync';
 
 const STATUS_DISPLAY = {
   signedOut: { label: 'Not syncing', color: 'var(--text-tertiary)' },
@@ -12,20 +13,35 @@ const STATUS_DISPLAY = {
   error: { label: 'Sync error - working locally', color: 'var(--danger)' }
 };
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export function AccountCard() {
-  const { user, syncStatus, signIn, signUp, signOut, syncNow, showToast } = React.useContext(AppContext);
+  const { user, syncStatus, provisioningError, signIn, signUp, signOut, syncNow, showToast } = React.useContext(AppContext);
   const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
 
-  const runAuth = async (fn, successMessage) => {
+  const validateInputs = () => {
+    if (!EMAIL_RE.test(email.trim())) {
+      setError('Enter a valid email address');
+      return false;
+    }
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters');
+      return false;
+    }
+    return true;
+  };
+
+  const runAuth = async (fn, successMessage, validate = false) => {
     setError(null);
+    if (validate && !validateInputs()) return;
     setBusy(true);
     try {
       const result = await fn();
       if (result?.needsConfirmation) {
-        showToast('Check your email to confirm your account, then sign in');
+        showToast('Account created - check your email to confirm, then sign in');
       } else if (successMessage) {
         showToast(successMessage);
       }
@@ -38,6 +54,7 @@ export function AccountCard() {
   };
 
   const status = STATUS_DISPLAY[syncStatus] || STATUS_DISPLAY.signedOut;
+  const syncError = syncStatus === 'error' ? (provisioningError || Sync.lastError) : null;
 
   return (
     <div className="card">
@@ -59,6 +76,11 @@ export function AccountCard() {
               to your account automatically; open the app on another device and sign
               in to pick up where you left off.
             </p>
+            {syncError && (
+              <p className="text-small mb-md" style={{ color: 'var(--danger)' }}>
+                {syncError}. Your data is safe on this device - use Sync Now to retry.
+              </p>
+            )}
             <div style={{ display: 'flex', gap: 'var(--space-sm)', flexWrap: 'wrap' }}>
               <button
                 className="btn btn-secondary"
@@ -75,6 +97,9 @@ export function AccountCard() {
                 Sign Out
               </button>
             </div>
+            {error && (
+              <p className="text-small text-danger" style={{ marginTop: 'var(--space-sm)' }}>{error}</p>
+            )}
           </>
         ) : (
           <>
@@ -119,7 +144,7 @@ export function AccountCard() {
               <button
                 className="btn btn-secondary"
                 disabled={busy || !email || !password}
-                onClick={() => runAuth(() => signUp(email, password))}
+                onClick={() => runAuth(() => signUp(email, password), 'Account created - syncing this device', true)}
               >
                 Create Account
               </button>

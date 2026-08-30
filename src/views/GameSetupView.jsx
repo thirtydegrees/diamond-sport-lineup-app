@@ -4,14 +4,16 @@
 
 import React from 'react';
 import { todayISO } from '../domain/dates';
+import { normalizeGamePlan } from '../domain/games';
 import { newId } from '../domain/ids';
+import { assessPitcherRest } from '../domain/pitching';
 import { AppContext } from '../state/AppContext';
 import { Storage } from '../services/storage';
 import { GameStartOptionsModal } from '../components/modals';
 import { Alert, Checkbox, PlayerTag } from '../components/ui';
 
 export function GameSetupView({ onStartGame }) {
-  const { roster, settings, game, setGame } = React.useContext(AppContext);
+  const { roster, settings, game, setGame, games, defaultBattingOrder } = React.useContext(AppContext);
 
   const [showStartOptions, setShowStartOptions] = React.useState(false);
   const [battingOrder, setBattingOrder] = React.useState([]);
@@ -40,7 +42,7 @@ export function GameSetupView({ onStartGame }) {
       setInitialized(true);
     } else {
       // New game - show options if there's a default order or last game
-      const hasDefault = !!Storage.getDefaultBattingOrder();
+      const hasDefault = !!defaultBattingOrder;
       const hasLastGame = !!Storage.getLastGame();
 
       if (hasDefault || hasLastGame) {
@@ -58,8 +60,7 @@ export function GameSetupView({ onStartGame }) {
     let order;
 
     if (option === 'default') {
-      const defaultOrder = Storage.getDefaultBattingOrder();
-      order = defaultOrder?.filter(id => roster.some(p => p.id === id)) || [];
+      order = defaultBattingOrder?.filter(id => roster.some(p => p.id === id)) || [];
       // Add any new roster players
       roster.forEach(p => {
         if (!order.includes(p.id)) order.push(p.id);
@@ -167,9 +168,11 @@ export function GameSetupView({ onStartGame }) {
     `With ${availablePlayers.length} players, ${availablePlayers.length - fielderCount} must sit each inning. Sit balancing may be difficult.` :
     null;
 
-  // Continue to lineup
+  // Continue to lineup. The plan is normalized so availability and inning
+  // edits can't leave hidden assignments, locks, or scores behind (H9).
   const handleContinue = () => {
-    const gameData = {
+    const gameData = normalizeGamePlan({
+      schemaVersion: 2,
       id: game?.id || newId(),
       date: gameDate,
       opponent,
@@ -181,10 +184,13 @@ export function GameSetupView({ onStartGame }) {
       lockedCells: game?.lockedCells || {},
       lineup: game?.lineup || {},
       score: game?.score || { us: {}, them: {} },
-      pitchLog: game?.pitchLog || {},
-      currentInning: game?.currentInning || 1,
+      status: game?.status || 'draft',
+      live: game?.live || null,
+      outs: game?.outs || [],
+      pitchCounts: game?.pitchCounts || {},
+      playerNames: game?.playerNames || {},
       exitedPlayers: game?.exitedPlayers || {}
-    };
+    });
 
     setGame(gameData);
     onStartGame(gameData);
@@ -194,7 +200,7 @@ export function GameSetupView({ onStartGame }) {
   if (showStartOptions) {
     return (
       <GameStartOptionsModal
-        hasDefaultOrder={!!Storage.getDefaultBattingOrder()}
+        hasDefaultOrder={!!defaultBattingOrder}
         hasLastGame={!!Storage.getLastGame()}
         onSelect={handleStartOption}
         onClose={() => handleStartOption('blank')}
@@ -260,7 +266,7 @@ export function GameSetupView({ onStartGame }) {
 
             const isAvailable = availability[playerId] !== false;
             const eligibility = player.canPitch ?
-              Storage.getPitcherEligibility(playerId, gameDate) : null;
+              assessPitcherRest(playerId, gameDate, games, settings.pitchRules) : null;
 
             return (
               <div

@@ -146,6 +146,7 @@ export function createBlankPlayer(): Player {
 
 export function createBlankGame(settings?: Settings): Game {
   return {
+    schemaVersion: 2,
     id: newId(),
     date: todayISO(),
     opponent: '',
@@ -157,8 +158,11 @@ export function createBlankGame(settings?: Settings): Game {
     lockedCells: {},
     lineup: {},
     score: { us: {}, them: {} },
-    pitchLog: {},
-    currentInning: 1,
+    status: 'draft',
+    live: null,
+    outs: [],
+    pitchCounts: {},
+    playerNames: {},
     exitedPlayers: {}
   };
 }

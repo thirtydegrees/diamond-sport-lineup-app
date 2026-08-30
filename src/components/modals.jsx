@@ -4,9 +4,9 @@
 
 import React from 'react';
 import { POSITIONS, POSITION_LABELS, POSITION_TIERS } from '../domain/constants';
+import { formatOutsAsInnings } from '../domain/games';
 import { newId } from '../domain/ids';
 import { Solver } from '../domain/solver';
-import { Storage } from '../services/storage';
 import { Alert, Checkbox, EmptyState, Modal, OptionItem, OptionList, PositionBadge } from './ui';
 
 // ============================================
@@ -182,17 +182,23 @@ export function PlayerEditorModal({ player, positions = POSITIONS, onSave, onClo
 // ============================================
 // Pitcher Picker Modal
 // ============================================
-export function PitcherPickerModal({ inning, players, currentPitcherId, gameDate, onSelect, onClose }) {
+/**
+ * Pitcher picker. `assess(player)` comes from the central pitching policy
+ * (rest from completed games, per-game caps, daily max). A pitcher with
+ * warnings is selectable only through an explicit override confirmation -
+ * real events stay recordable, but never silently (H6).
+ */
+export function PitcherPickerModal({ title, players, currentPitcherId, assess, onSelect, onClose, allowClear = true }) {
+  const [overridePrompt, setOverridePrompt] = React.useState(null);
+
   // Group pitchers
   const primaryPitchers = [];
   const backupPitchers = [];
 
   players.forEach(player => {
     if (!player.canPitch) return;
-
-    const eligibility = Storage.getPitcherEligibility(player.id, gameDate);
-    const pitcherData = { player, eligibility };
-
+    const decision = assess(player);
+    const pitcherData = { player, decision };
     if (player.prefersPitching) {
       primaryPitchers.push(pitcherData);
     } else {
@@ -200,28 +206,43 @@ export function PitcherPickerModal({ inning, players, currentPitcherId, gameDate
     }
   });
 
-  const renderPitcherOption = ({ player, eligibility }) => {
+  const pick = ({ player, decision }) => {
+    if (!decision.allowed) return;
+    if (decision.warnings.length > 0) {
+      setOverridePrompt({ player, decision });
+    } else {
+      onSelect(player.id);
+    }
+  };
+
+  const renderPitcherOption = (data) => {
+    const { player, decision } = data;
     const isSelected = player.id === currentPitcherId;
+    const warned = decision.warnings.length > 0;
 
     return (
       <div
         key={player.id}
-        className={`pitcher-option ${!eligibility.eligible ? 'disabled' : ''} ${isSelected ? 'selected' : ''}`}
-        onClick={() => eligibility.eligible && onSelect(player.id)}
+        className={`pitcher-option ${!decision.allowed ? 'disabled' : ''} ${isSelected ? 'selected' : ''}`}
+        onClick={() => pick(data)}
       >
         <span style={{ fontWeight: isSelected ? 600 : 400 }}>
           {player.name}
           {isSelected && ' ✓'}
         </span>
-        <span className={`pitcher-status ${eligibility.eligible ? 'eligible' : 'ineligible'}`}>
-          {eligibility.reason}
+        <span className={`pitcher-status ${warned || !decision.allowed ? 'ineligible' : 'eligible'}`}>
+          {!decision.allowed
+            ? decision.warnings[0]?.short || 'Cannot pitch'
+            : warned
+              ? `⚠ ${decision.warnings[0].short}`
+              : 'Eligible'}
         </span>
       </div>
     );
   };
 
   return (
-    <Modal title={`Pitcher - Inning ${inning}`} onClose={onClose}>
+    <Modal title={title} onClose={onClose}>
       {primaryPitchers.length > 0 && (
         <div className="pitcher-group">
           <div className="pitcher-group-title">Primary Pitchers</div>
@@ -244,11 +265,43 @@ export function PitcherPickerModal({ inning, players, currentPitcherId, gameDate
         />
       )}
 
-      <div style={{ marginTop: '16px' }}>
-        <button className="btn btn-secondary btn-block" onClick={() => onSelect(null)}>
-          Clear Assignment
-        </button>
-      </div>
+      {allowClear && (
+        <div style={{ marginTop: '16px' }}>
+          <button className="btn btn-secondary btn-block" onClick={() => onSelect(null)}>
+            Clear Assignment
+          </button>
+        </div>
+      )}
+
+      {overridePrompt && (
+        <Modal title="Pitching Rule Warning" onClose={() => setOverridePrompt(null)}>
+          <Alert type="warning">
+            {overridePrompt.decision.warnings.map((w, i) => (
+              <div key={i}>{w.message}</div>
+            ))}
+          </Alert>
+          <p className="text-small text-muted" style={{ margin: '12px 0' }}>
+            Overriding records your choice but does not change your league's rules.
+            Only continue for a league-approved exception or to record what actually
+            happened.
+          </p>
+          <div style={{ display: 'flex', gap: '8px' }}>
+            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setOverridePrompt(null)}>
+              Cancel
+            </button>
+            <button
+              className="btn btn-danger"
+              style={{ flex: 1 }}
+              onClick={() => {
+                onSelect(overridePrompt.player.id);
+                setOverridePrompt(null);
+              }}
+            >
+              Override & Assign
+            </button>
+          </div>
+        </Modal>
+      )}
     </Modal>
   );
 }
@@ -350,14 +403,6 @@ export function CellActionModal({ player, inning, position, isLocked, onAction, 
           />
         )}
 
-        {position === 'P' && (
-          <OptionItem
-            title="⚾ Pitch Counter"
-            description="Track pitches thrown"
-            onClick={() => onAction('pitchCount')}
-          />
-        )}
-
         <OptionItem
           title="📍 Change Position"
           description="Manually assign a different position"
@@ -377,19 +422,25 @@ export function CellActionModal({ player, inning, position, isLocked, onAction, 
 
 // ============================================
 // Pitch Counter Modal
+//
+// The WORKING count: taps accumulate per inning, and the total
+// can be corrected directly (coach reconciles against an
+// official scorer mid-game). Nothing here becomes authoritative
+// workload - that happens at game completion, where every
+// pitcher's final count is reviewed and confirmed.
 // ============================================
-export function PitchCounterModal({ player, inning, pitchLog, onUpdate, onEndInning, onClose }) {
-  const currentInningPitches = pitchLog[inning] || 0;
-  const totalPitches = Object.values(pitchLog).reduce((sum, count) => sum + count, 0);
+export function PitchCounterModal({ player, inning, entry, dailyMax, dailyTotal, onCount, onSetTotal, onClose }) {
+  const currentInningPitches = entry.byInning[inning] || 0;
+  const totalPitches = entry.live;
+  const [editing, setEditing] = React.useState(false);
+  const [editValue, setEditValue] = React.useState('');
 
-  const handleIncrement = () => {
-    onUpdate(inning, currentInningPitches + 1);
-  };
+  const overMax = dailyMax != null && dailyMax > 0 && dailyTotal >= dailyMax;
 
-  const handleDecrement = () => {
-    if (currentInningPitches > 0) {
-      onUpdate(inning, currentInningPitches - 1);
-    }
+  const commitEdit = () => {
+    const n = parseInt(editValue, 10);
+    if (Number.isFinite(n) && n >= 0) onSetTotal(n);
+    setEditing(false);
   };
 
   return (
@@ -398,15 +449,42 @@ export function PitchCounterModal({ player, inning, pitchLog, onUpdate, onEndInn
         <div className="pitch-counter-title">Current Pitcher</div>
         <div className="pitch-counter-name">{player.name}</div>
 
-        <div className="pitch-counter-display">{totalPitches}</div>
-        <div className="pitch-counter-inning">
-          {currentInningPitches} this inning
-        </div>
+        {editing ? (
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', justifyContent: 'center', margin: '12px 0' }}>
+            <input
+              type="number"
+              inputMode="numeric"
+              className="form-input"
+              style={{ width: '110px', fontSize: '24px', textAlign: 'center' }}
+              value={editValue}
+              min={0}
+              autoFocus
+              onChange={(e) => setEditValue(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') commitEdit(); }}
+              aria-label="Corrected total pitches"
+            />
+            <button className="btn btn-primary" onClick={commitEdit}>Set</button>
+          </div>
+        ) : (
+          <>
+            <div className="pitch-counter-display">{totalPitches}</div>
+            <div className="pitch-counter-inning">
+              {currentInningPitches} this inning
+            </div>
+          </>
+        )}
+
+        {overMax && (
+          <Alert type="warning">
+            {dailyTotal} pitches today - at or over the configured max of {dailyMax}.
+            Keep counting what actually happens; the overage is flagged, not hidden.
+          </Alert>
+        )}
 
         <div className="pitch-counter-buttons">
           <button
             className="pitch-btn-minus"
-            onClick={handleDecrement}
+            onClick={() => currentInningPitches > 0 && onCount(inning, currentInningPitches - 1)}
             disabled={currentInningPitches === 0}
             aria-label="Subtract one pitch"
           >
@@ -414,7 +492,7 @@ export function PitchCounterModal({ player, inning, pitchLog, onUpdate, onEndInn
           </button>
           <button
             className="pitch-btn-plus"
-            onClick={handleIncrement}
+            onClick={() => onCount(inning, currentInningPitches + 1)}
             aria-label="Add one pitch"
           >
             +1
@@ -422,14 +500,200 @@ export function PitchCounterModal({ player, inning, pitchLog, onUpdate, onEndInn
         </div>
 
         <div className="pitch-counter-actions">
-          <button className="btn btn-secondary" onClick={onClose}>
-            Close
+          <button
+            className="btn btn-secondary"
+            onClick={() => { setEditValue(String(totalPitches)); setEditing(true); }}
+          >
+            ✏️ Correct Total
           </button>
-          <button className="btn btn-primary" onClick={onEndInning}>
-            End Inning
+          <button className="btn btn-primary" onClick={onClose}>
+            Done
           </button>
         </div>
+        <p className="form-hint" style={{ textAlign: 'center', marginTop: '8px' }}>
+          Counts save as you tap. You'll confirm final totals when you complete the game.
+        </p>
       </div>
+    </Modal>
+  );
+}
+
+// ============================================
+// Complete Game - pitch confirmation
+//
+// A player who actually pitched must have a confirmed final
+// count (or be explicitly marked unknown - never silently zero)
+// before the game becomes authoritative for eligibility.
+// ============================================
+export function CompleteGameModal({ rows, hasOuts, onComplete, onClose }) {
+  // rows: [{ playerId, name, pitchingOuts, workingCount }]
+  const [values, setValues] = React.useState(() => {
+    const v = {};
+    rows.forEach(r => { v[r.playerId] = { text: String(r.workingCount), unknown: false }; });
+    return v;
+  });
+
+  const setRow = (id, patch) => setValues(prev => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+
+  const invalid = rows.some(r => {
+    const v = values[r.playerId];
+    if (v.unknown) return false;
+    const n = parseInt(v.text, 10);
+    return !Number.isFinite(n) || n < 0;
+  });
+
+  const handleComplete = () => {
+    if (invalid) return;
+    onComplete(rows.map(r => {
+      const v = values[r.playerId];
+      return {
+        playerId: r.playerId,
+        pitches: v.unknown ? null : parseInt(v.text, 10)
+      };
+    }));
+  };
+
+  return (
+    <Modal
+      title="Complete Game"
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn btn-secondary" onClick={onClose}>Not Yet</button>
+          <button className="btn btn-primary" onClick={handleComplete} disabled={invalid}>
+            ✓ Confirm & Complete
+          </button>
+        </>
+      }
+    >
+      {!hasOuts && (
+        <Alert type="warning">
+          No defensive outs were recorded, so this game will save with no
+          participation history (score only). Use Record Out during the game
+          to track actual playing time.
+        </Alert>
+      )}
+
+      {rows.length > 0 ? (
+        <>
+          <p className="text-small" style={{ marginBottom: '12px' }}>
+            Review the final pitch count for everyone who pitched. Correct any
+            total the in-game counter missed (e.g. against the official book),
+            or mark it unknown if you can't establish it.
+          </p>
+          {rows.map(r => {
+            const v = values[r.playerId];
+            return (
+              <div
+                key={r.playerId}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '10px',
+                  padding: '10px 0', borderBottom: '1px solid var(--border-light)'
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600 }}>{r.name}</div>
+                  <div className="text-muted text-small">
+                    {r.pitchingOuts > 0
+                      ? `Pitched ${formatOutsAsInnings(r.pitchingOuts)} inning${r.pitchingOuts === 3 ? '' : 's'} (${r.pitchingOuts} out${r.pitchingOuts === 1 ? '' : 's'})`
+                      : 'Counter used, no pitching outs recorded'}
+                  </div>
+                </div>
+                <input
+                  type="number"
+                  inputMode="numeric"
+                  className="form-input"
+                  style={{ width: '76px', textAlign: 'center' }}
+                  value={v.unknown ? '' : v.text}
+                  disabled={v.unknown}
+                  min={0}
+                  onChange={(e) => setRow(r.playerId, { text: e.target.value })}
+                  aria-label={`Final pitches for ${r.name}`}
+                />
+                <label className="checkbox" style={{ whiteSpace: 'nowrap' }}>
+                  <input
+                    type="checkbox"
+                    className="checkbox-input"
+                    checked={v.unknown}
+                    onChange={(e) => setRow(r.playerId, { unknown: e.target.checked })}
+                  />
+                  <span className="checkbox-label text-small">Unknown</span>
+                </label>
+              </div>
+            );
+          })}
+          <p className="form-hint" style={{ marginTop: '10px' }}>
+            An unknown count is never treated as zero - the pitcher shows as
+            "count needed" and gets the most conservative rest until you fix it
+            in History.
+          </p>
+        </>
+      ) : (
+        <p className="text-small">No pitching was recorded in this game.</p>
+      )}
+    </Modal>
+  );
+}
+
+// ============================================
+// Live formation change - pick a player for a spot
+// ============================================
+export function LiveSpotPickerModal({ position, players, currentHolderId, warningsFor, onSelect, onClose }) {
+  const [overridePrompt, setOverridePrompt] = React.useState(null);
+
+  const pick = (player) => {
+    const warnings = warningsFor ? warningsFor(player) : [];
+    const blocked = warnings.some(w => w.severity === 'block');
+    if (blocked) return;
+    if (warnings.length > 0) {
+      setOverridePrompt({ player, warnings });
+    } else {
+      onSelect(player.id);
+    }
+  };
+
+  return (
+    <Modal title={position === 'SIT' ? 'Send to Bench' : `Who takes ${POSITION_LABELS[position] || position}?`} onClose={onClose}>
+      <p className="text-muted text-small mb-md">
+        The player currently there swaps into this player's old spot.
+      </p>
+      <OptionList>
+        {players.map(player => {
+          const warnings = warningsFor ? warningsFor(player) : [];
+          const blocked = warnings.some(w => w.severity === 'block');
+          return (
+            <OptionItem
+              key={player.id}
+              title={`${player.name}${player.id === currentHolderId ? ' (current)' : ''}${blocked ? ' - cannot' : warnings.length ? ' ⚠' : ''}`}
+              description={warnings[0]?.short}
+              onClick={() => pick(player)}
+            />
+          );
+        })}
+      </OptionList>
+
+      {overridePrompt && (
+        <Modal title="Rule Warning" onClose={() => setOverridePrompt(null)}>
+          <Alert type="warning">
+            {overridePrompt.warnings.map((w, i) => <div key={i}>{w.message}</div>)}
+          </Alert>
+          <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
+            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setOverridePrompt(null)}>
+              Cancel
+            </button>
+            <button
+              className="btn btn-danger"
+              style={{ flex: 1 }}
+              onClick={() => {
+                onSelect(overridePrompt.player.id);
+                setOverridePrompt(null);
+              }}
+            >
+              Override & Assign
+            </button>
+          </div>
+        </Modal>
+      )}
     </Modal>
   );
 }

@@ -1,46 +1,61 @@
 /* ============================================
    Diamond Lineup - Season Analytics
 
-   Pure computations over saved games and pitch history.
-   Everything here is presentation-agnostic so the Stats
-   view (and later, server-side reports) can share it.
+   Pure computations over COMPLETED games' recorded-out ledgers.
+   Planned lineups, drafts, and live games contribute nothing:
+   if it isn't a recorded out in a completed game, it never
+   happened as far as stats are concerned (H8).
+
+   Units are defensive OUTS (the actual grain of participation);
+   use formatOutsAsInnings for inning-equivalent display.
+   Players removed from the roster keep their identity through
+   each game's name snapshots (M5).
    ============================================ */
 
 import { getPositionGroup } from './constants';
-import type { Assignment, Game, PitchRecord, Player } from './types';
+import { deriveOutings } from './pitching';
+import type { Assignment, Game, Player } from './types';
 
 export type PositionGroupKey = 'P' | 'C' | 'IF' | 'OF' | 'SIT';
 
 export interface PlayerSeasonStats {
   playerId: string;
   name: string;
+  onRoster: boolean;
   gamesPlayed: number;
-  /** Innings with any assignment, bench included. */
-  innings: number;
+  /** Recorded outs with any assignment, bench included. */
+  outs: number;
   byGroup: Record<PositionGroupKey, number>;
   byPosition: Partial<Record<Assignment, number>>;
-  sits: number;
-  /** Share of tracked innings spent on the bench (0-1). */
+  sitOuts: number;
+  /** Share of recorded outs spent on the bench (0-1). */
   sitShare: number;
+  /** True when any counted game has estimated (legacy) participation. */
+  estimated: boolean;
 }
 
 export interface PitcherGameLoad {
   gameId: string;
   date: string;
   opponent: string;
-  pitches: number;
-  inningsPitched: number;
+  /** Confirmed pitches, or null when the count is unknown. */
+  pitches: number | null;
+  pitchingOuts: number;
+  estimated: boolean;
 }
 
 export interface PitcherSeasonStats {
   playerId: string;
   name: string;
   games: number;
+  /** Sum of confirmed counts (unknown outings excluded, flagged below). */
   totalPitches: number;
-  totalInnings: number;
+  totalPitchingOuts: number;
   avgPitches: number;
   /** Pitches thrown in the 7 calendar days ending at `today` (inclusive). */
   last7Pitches: number;
+  /** Outings whose final count is still unknown. */
+  unknownCountGames: number;
   /** Chronological, oldest first. */
   perGame: PitcherGameLoad[];
 }
@@ -75,10 +90,25 @@ export const GROUP_LABELS: Record<PositionGroupKey, string> = {
   SIT: 'Bench'
 };
 
+function blankStats(playerId: string, name: string, onRoster: boolean): PlayerSeasonStats {
+  return {
+    playerId,
+    name,
+    onRoster,
+    gamesPlayed: 0,
+    outs: 0,
+    byGroup: { P: 0, C: 0, IF: 0, OF: 0, SIT: 0 },
+    byPosition: {},
+    sitOuts: 0,
+    sitShare: 0,
+    estimated: false
+  };
+}
+
 /**
- * Per-player position distribution across saved games.
- * Returned in roster order; players with no tracked innings included
- * (so a kid who missed every game still shows up, honestly, with zeros).
+ * Per-player participation across completed games' out ledgers.
+ * Roster players come first (zeros included, honestly); players since
+ * removed from the roster follow, named from game snapshots.
  */
 export function computeSeasonStats(
   games: Game[],
@@ -86,33 +116,28 @@ export function computeSeasonStats(
   range?: DateRange
 ): PlayerSeasonStats[] {
   const byPlayer = new Map<string, PlayerSeasonStats>();
-  roster.forEach(p => {
-    byPlayer.set(p.id, {
-      playerId: p.id,
-      name: p.name,
-      gamesPlayed: 0,
-      innings: 0,
-      byGroup: { P: 0, C: 0, IF: 0, OF: 0, SIT: 0 },
-      byPosition: {},
-      sits: 0,
-      sitShare: 0
-    });
-  });
+  roster.forEach(p => byPlayer.set(p.id, blankStats(p.id, p.name, true)));
 
   for (const game of games) {
+    if (game.status !== 'completed') continue;
     if (!inRange(game.date, range)) continue;
+    const estimated = game.participationQuality === 'estimated';
     const playedThisGame = new Set<string>();
 
-    for (const [key, pos] of Object.entries(game.lineup || {})) {
-      const playerId = key.slice(0, key.lastIndexOf('-'));
-      const stats = byPlayer.get(playerId);
-      if (!stats) continue; // player no longer on roster
-
-      stats.innings++;
-      stats.byGroup[groupOf(pos)]++;
-      stats.byPosition[pos] = (stats.byPosition[pos] || 0) + 1;
-      if (pos === 'SIT') stats.sits++;
-      playedThisGame.add(playerId);
+    for (const out of game.outs || []) {
+      for (const [playerId, pos] of Object.entries(out.assignments)) {
+        let stats = byPlayer.get(playerId);
+        if (!stats) {
+          stats = blankStats(playerId, game.playerNames?.[playerId] || '(removed)', false);
+          byPlayer.set(playerId, stats);
+        }
+        stats.outs++;
+        stats.byGroup[groupOf(pos)]++;
+        stats.byPosition[pos] = (stats.byPosition[pos] || 0) + 1;
+        if (pos === 'SIT') stats.sitOuts++;
+        if (estimated) stats.estimated = true;
+        playedThisGame.add(playerId);
+      }
     }
 
     playedThisGame.forEach(id => {
@@ -122,58 +147,67 @@ export function computeSeasonStats(
   }
 
   for (const stats of byPlayer.values()) {
-    stats.sitShare = stats.innings > 0 ? stats.sits / stats.innings : 0;
+    stats.sitShare = stats.outs > 0 ? stats.sitOuts / stats.outs : 0;
   }
 
-  return roster.map(p => byPlayer.get(p.id)!);
+  const rosterRows = roster.map(p => byPlayer.get(p.id)!);
+  const removedRows = [...byPlayer.values()]
+    .filter(s => !s.onRoster)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  return [...rosterRows, ...removedRows];
 }
 
 /**
- * Per-pitcher workload from pitch history. Includes every roster player
- * with at least one record; sorted by total pitches, heaviest first.
+ * Per-pitcher workload derived from completed games. Sorted by total
+ * confirmed pitches, heaviest first; unknown-count outings are counted
+ * as games and flagged, never silently zeroed.
  */
 export function computePitchingStats(
-  history: PitchRecord[],
-  roster: Player[],
   games: Game[],
+  roster: Player[],
   today: string,
   range?: DateRange
 ): PitcherSeasonStats[] {
   const opponentByGame = new Map<string, string>();
-  games.forEach(g => opponentByGame.set(g.id, g.opponent || ''));
+  const nameByPlayer = new Map<string, string>();
+  games.forEach(g => {
+    opponentByGame.set(g.id, g.opponent || '');
+    Object.entries(g.playerNames || {}).forEach(([id, name]) => nameByPlayer.set(id, name));
+  });
+  roster.forEach(p => nameByPlayer.set(p.id, p.name));
 
   const byPlayer = new Map<string, PitcherSeasonStats>();
 
-  for (const record of history) {
-    if (!inRange(record.date, range)) continue;
-    const player = roster.find(p => p.id === record.playerId);
-    if (!player) continue;
+  for (const outing of deriveOutings(games)) {
+    if (!inRange(outing.date, range)) continue;
 
-    let stats = byPlayer.get(record.playerId);
+    let stats = byPlayer.get(outing.playerId);
     if (!stats) {
       stats = {
-        playerId: record.playerId,
-        name: player.name,
+        playerId: outing.playerId,
+        name: nameByPlayer.get(outing.playerId) || '(removed)',
         games: 0,
         totalPitches: 0,
-        totalInnings: 0,
+        totalPitchingOuts: 0,
         avgPitches: 0,
         last7Pitches: 0,
+        unknownCountGames: 0,
         perGame: []
       };
-      byPlayer.set(record.playerId, stats);
+      byPlayer.set(outing.playerId, stats);
     }
 
-    const inningsPitched = record.inningsPitched ?? Object.keys(record.innings || {}).length;
     stats.games++;
-    stats.totalPitches += record.pitches || 0;
-    stats.totalInnings += inningsPitched;
+    stats.totalPitchingOuts += outing.pitchingOuts;
+    if (outing.pitches === null) stats.unknownCountGames++;
+    else stats.totalPitches += outing.pitches;
     stats.perGame.push({
-      gameId: record.gameId,
-      date: record.date,
-      opponent: opponentByGame.get(record.gameId) || '',
-      pitches: record.pitches || 0,
-      inningsPitched
+      gameId: outing.gameId,
+      date: outing.date,
+      opponent: opponentByGame.get(outing.gameId) || '',
+      pitches: outing.pitches,
+      pitchingOuts: outing.pitchingOuts,
+      estimated: outing.estimated
     });
   }
 
@@ -182,10 +216,11 @@ export function computePitchingStats(
 
   for (const stats of byPlayer.values()) {
     stats.perGame.sort((a, b) => a.date.localeCompare(b.date));
-    stats.avgPitches = stats.games > 0 ? Math.round(stats.totalPitches / stats.games) : 0;
+    const confirmedGames = stats.games - stats.unknownCountGames;
+    stats.avgPitches = confirmedGames > 0 ? Math.round(stats.totalPitches / confirmedGames) : 0;
     stats.last7Pitches = stats.perGame
       .filter(g => g.date >= sevenDaysAgo && g.date <= today)
-      .reduce((sum, g) => sum + g.pitches, 0);
+      .reduce((sum, g) => sum + (g.pitches || 0), 0);
   }
 
   return [...byPlayer.values()].sort((a, b) => b.totalPitches - a.totalPitches);

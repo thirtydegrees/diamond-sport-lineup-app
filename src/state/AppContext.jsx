@@ -3,8 +3,14 @@
 
    Local-first: state loads from and persists to localStorage.
    When signed in, every persisted change is also mirrored to
-   the team's cloud rows (debounced), and remote data can be
-   applied back by refreshing state from Storage.
+   the team's cloud rows (per-key, serialized, debounced), and
+   remote data can be applied back by refreshing state from
+   Storage.
+
+   Auth state is the sole owner of the sync lifecycle: a
+   SIGNED_OUT event (from anywhere - our button, another tab,
+   session expiry) disables sync immediately so queued writes
+   can never cross an account boundary.
    ============================================ */
 
 import React from 'react';
@@ -21,12 +27,13 @@ export function AppProvider({ children }) {
   const [settings, setSettings] = React.useState(() => Storage.getSettings());
   const [game, setGame] = React.useState(() => Storage.getCurrentGame());
   const [games, setGames] = React.useState(() => Storage.getGames());
-  const [pitchHistory, setPitchHistory] = React.useState(() => Storage.getPitchHistory());
+  const [defaultBattingOrder, setDefaultBattingOrder] = React.useState(() => Storage.getDefaultBattingOrder());
   const [toasts, setToasts] = React.useState([]);
 
   // Account & sync
   const [user, setUser] = React.useState(null);
   const [syncStatus, setSyncStatus] = React.useState('signedOut');
+  const [provisioningError, setProvisioningError] = React.useState(null);
   const initialSyncRan = React.useRef(false);
 
   const showToast = React.useCallback((message, type = 'success') => {
@@ -43,34 +50,47 @@ export function AppProvider({ children }) {
     setSettings(Storage.getSettings());
     setGame(Storage.getCurrentGame());
     setGames(Storage.getGames());
-    setPitchHistory(Storage.getPitchHistory());
+    setDefaultBattingOrder(Storage.getDefaultBattingOrder());
   }, []);
 
-  // Persist changes to storage and mirror to the cloud when signed in
+  // Persist changes to storage and mirror to the cloud when signed in.
+  // Skips the initial mount (loading is not a change), and surfaces
+  // write failures instead of silently dropping data (M6).
+  const mounted = React.useRef(false);
   React.useEffect(() => {
-    Storage.saveRoster(roster);
-    Sync.schedulePush(StorageKeys.ROSTER, roster);
-  }, [roster]);
+    mounted.current = true;
+  }, []);
 
-  React.useEffect(() => {
-    Storage.saveSettings(settings);
-    Sync.schedulePush(StorageKeys.SETTINGS, settings);
-  }, [settings]);
+  const persistFailed = React.useRef(new Set());
+  const persist = React.useCallback((key, ok) => {
+    if (!ok) {
+      if (!persistFailed.current.has(key)) {
+        persistFailed.current.add(key);
+        showToast("Couldn't save to device storage - free up space and retry", 'error');
+      }
+      return;
+    }
+    persistFailed.current.delete(key);
+    Sync.schedulePush(key);
+  }, [showToast]);
 
-  React.useEffect(() => {
-    Storage.saveCurrentGame(game);
-    Sync.schedulePush(StorageKeys.CURRENT_GAME, game);
-  }, [game]);
+  const usePersist = (key, save, value) => {
+    const first = React.useRef(true);
+    React.useEffect(() => {
+      if (first.current) {
+        first.current = false;
+        return;
+      }
+      persist(key, save(value));
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [value]);
+  };
 
-  React.useEffect(() => {
-    Storage.saveGames(games);
-    Sync.schedulePush(StorageKeys.GAMES, games);
-  }, [games]);
-
-  React.useEffect(() => {
-    Storage.savePitchHistory(pitchHistory);
-    Sync.schedulePush(StorageKeys.PITCH_HISTORY, pitchHistory);
-  }, [pitchHistory]);
+  usePersist(StorageKeys.ROSTER, v => Storage.saveRoster(v), roster);
+  usePersist(StorageKeys.SETTINGS, v => Storage.saveSettings(v), settings);
+  usePersist(StorageKeys.CURRENT_GAME, v => Storage.saveCurrentGame(v), game);
+  usePersist(StorageKeys.GAMES, v => Storage.saveGames(v), games);
+  usePersist(StorageKeys.DEFAULT_BATTING_ORDER, v => Storage.saveDefaultBattingOrder(v), defaultBattingOrder);
 
   // Apply dark mode
   React.useEffect(() => {
@@ -83,6 +103,22 @@ export function AppProvider({ children }) {
   // Surface sync status changes
   React.useEffect(() => Sync.onStatus(setSyncStatus), []);
 
+  const runInitialSync = React.useCallback(async (sessionUser) => {
+    setProvisioningError(null);
+    try {
+      const decision = await Sync.initialSync(sessionUser.id);
+      if (decision === 'applyRemote') {
+        reloadFromStorage();
+        showToast('Team data loaded from your account');
+      }
+      return true;
+    } catch (e) {
+      setProvisioningError(e?.message || 'Cloud sync is unavailable');
+      showToast('Cloud sync is unavailable right now - working locally', 'error');
+      return false;
+    }
+  }, [reloadFromStorage, showToast]);
+
   // Track the auth session and run the initial sync when one appears
   React.useEffect(() => {
     let cancelled = false;
@@ -92,24 +128,19 @@ export function AppProvider({ children }) {
       setUser(session?.user ?? null);
       if (session?.user && !initialSyncRan.current) {
         initialSyncRan.current = true;
-        try {
-          const decision = await Sync.initialSync();
-          if (cancelled) return;
-          if (decision === 'applyRemote') {
-            reloadFromStorage();
-            showToast('Team data loaded from your account');
-          }
-        } catch {
-          showToast('Cloud sync is unavailable right now - working locally', 'error');
-        }
+        await runInitialSync(session.user);
       }
     };
 
     supabase.auth.getSession().then(({ data }) => handleSession(data.session));
     const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
       if (!session) {
+        // Auth is gone (sign-out here, another tab, or expiry): stop sync
+        // NOW so no queued write can outlive the account (H4)
         initialSyncRan.current = false;
+        Sync.disable();
         setUser(null);
+        setProvisioningError(null);
       } else {
         handleSession(session);
       }
@@ -119,25 +150,33 @@ export function AppProvider({ children }) {
       cancelled = true;
       sub.subscription.unsubscribe();
     };
-  }, [reloadFromStorage, showToast]);
+  }, [runInitialSync]);
 
   // ----------------------------------------
   // Account actions
   // ----------------------------------------
   const signIn = React.useCallback(async (email, password) => {
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
     if (error) throw error;
   }, []);
 
   const signUp = React.useCallback(async (email, password) => {
-    const { data, error } = await supabase.auth.signUp({ email, password });
+    const { data, error } = await supabase.auth.signUp({ email: email.trim(), password });
     if (error) throw error;
     // With email confirmation enabled, no session is returned yet
     return { needsConfirmation: !data.session };
   }, []);
 
   const signOut = React.useCallback(async () => {
-    await supabase.auth.signOut();
+    await Sync.flushBeforeSignOut();
+    const { error } = await supabase.auth.signOut();
+    if (error) {
+      // The session may still be alive; do NOT claim a sign-out happened
+      showToast(`Sign out failed: ${error.message}`, 'error');
+      throw error;
+    }
+    // onAuthStateChange fires with no session and disables sync; this is a
+    // belt-and-suspenders for environments where the event is delayed
     Sync.disable();
     initialSyncRan.current = false;
     setUser(null);
@@ -145,6 +184,13 @@ export function AppProvider({ children }) {
   }, [showToast]);
 
   const syncNow = React.useCallback(async () => {
+    // A failed initial provisioning can be retried from the same button
+    if (!Sync.isReady && user) {
+      const ok = await runInitialSync(user);
+      if (!ok) throw new Error(Sync.lastError || 'Sync is unavailable');
+      showToast('Sync is back online');
+      return;
+    }
     const decision = await Sync.syncNow();
     if (decision === 'applyRemote') {
       reloadFromStorage();
@@ -152,7 +198,7 @@ export function AppProvider({ children }) {
     } else {
       showToast('Everything synced');
     }
-  }, [reloadFromStorage, showToast]);
+  }, [reloadFromStorage, runInitialSync, showToast, user]);
 
   const value = {
     roster,
@@ -163,12 +209,13 @@ export function AppProvider({ children }) {
     setGame,
     games,
     setGames,
-    pitchHistory,
-    setPitchHistory,
+    defaultBattingOrder,
+    setDefaultBattingOrder,
     showToast,
     reloadFromStorage,
     user,
     syncStatus,
+    provisioningError,
     signIn,
     signUp,
     signOut,
