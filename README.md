@@ -14,7 +14,8 @@ territory). This is lineup logistics only.
 ```bash
 npm install
 npm run dev        # local dev server
-npm test           # unit tests (solver, eligibility, dates)
+npm test           # unit tests (solver, pitching policy, out ledger,
+                   # migration, sync decisions, backup validation)
 npm run build      # type-check + production build to dist/
 npm run preview    # serve the production build locally
 npm run test:e2e   # browser E2E suite (build + preview on :4173 first;
@@ -77,6 +78,35 @@ automatically (debounced) and every app launch pulls.
 Import the GitHub repo in Vercel; it auto-detects Vite (build
 `npm run build`, output `dist/`). No environment variables are required.
 Vercel deploys the repo's production branch (`main`) on every push.
+
+After a deploy, coaches should **fully close and reopen the app** (or the
+installed PWA) so the new service worker activates. Do not tell them to
+clear site data — that would wipe the device's local season.
+
+The v1 → v2 data migration is **forward-only**: once a device has written
+v2 data, do not roll it back to a pre-migration build. Ship a forward fix
+instead.
+
+## Running the beta
+
+Guidance to give each beta coach:
+
+1. **Add it to your home screen** (Share → Add to Home Screen on iOS, or
+   the install prompt on Android/desktop). It works offline in the dugout.
+2. **One device at a time during a game.** Run the game on the phone, then
+   tap **Sync Now** before picking it up on the laptop. Two devices editing
+   the same season at once resolves per key, last write wins — fine, but
+   not what you want mid-game.
+3. **Download a backup after each game** (Settings → Backup & Restore).
+   It is the belt-and-suspenders copy, and the only way to move data
+   between two accounts.
+4. **Complete games, don't discard them.** Only a completed game creates
+   history, workload, and rest eligibility. Discarding leaves no trace by
+   design — if real innings were played, use Complete Game (a shortened
+   game completes fine after any number of outs).
+5. **Fix mistakes in place.** Undo Out during the game; History → Fix
+   Participation afterwards; pitch counts stay correctable forever and
+   re-derive eligibility immediately.
 
 ## Architecture
 
@@ -176,4 +206,12 @@ the *previous day* in US timezones.
       history corrections, centralized pitching policy, per-key sync
       protocol with tombstones and identity binding, validated atomic
       restore, atomic team provisioning
-- [ ] **Phase 5** – Hosted beta on Vercel; payments later
+- [x] **Beta remediation pass 2** – explicitly reviewed pitch counts
+      (enforced in the domain, not just the UI), one policy gate on every
+      mound/formation change with live P/C rules and a cap-crossing
+      checkpoint, postgame participation corrections, multi-team accounts
+      with account-bound local data, dirty state that survives sign-out,
+      password reset + durable email-confirmation state
+- [x] **Phase 5** – Hosted beta on Vercel
+- [ ] **Next** – Beta feedback; per-game rule snapshots; account deletion
+      UI; dependency/toolchain updates
