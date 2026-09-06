@@ -1,4 +1,5 @@
-/* End-to-end smoke test: demo roster -> game setup -> auto-generated lineup.
+/* End-to-end smoke test: demo roster -> plan -> live out tracking ->
+   completion with pitch confirmation -> history/stats -> data safety.
    Runs in America/Denver to verify the date fix in a US timezone. */
 import { chromium } from 'playwright-core';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -59,7 +60,7 @@ await page.waitForSelector('.lineup-grid');
 
 // 4. Verify the grid is fully filled: 12 players x 6 innings = 72 cells with positions
 const cellTexts = await page.locator('.lineup-grid .lineup-cell:not(.header):not(.player-col) .pos-text').allTextContents();
-cellTexts.length === 72 ? ok('lineup grid fully populated (72 assignments)') : fail(`expected 72 filled cells, got ${cellTexts.length}`);
+cellTexts.length === 72 ? ok('lineup plan fully populated (72 assignments)') : fail(`expected 72 filled cells, got ${cellTexts.length}`);
 
 // Each inning column must contain all 9 positions exactly once
 const positions = ['P', 'C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF'];
@@ -69,7 +70,7 @@ for (let inning = 0; inning < 6; inning++) {
   const fielded = col.filter(p => p !== 'SIT').sort().join(',');
   if (fielded !== [...positions].sort().join(',')) fail(`inning ${inning + 1} invalid: ${col.join(' ')}`);
 }
-ok('every inning fields all 9 positions exactly once');
+ok('every planned inning fields all 9 positions exactly once');
 
 // SIT balance: each player sits at most 2, spread <= 1
 const sitCounts = [];
@@ -95,77 +96,201 @@ await page.waitForTimeout(300);
 const refilled2 = await page.locator('.lineup-grid .lineup-cell:not(.header):not(.player-col) .pos-text').count();
 refilled2 === 72 ? ok('Fill / Re-solve works') : fail(`Fill/Re-solve left ${refilled2}/72 cells`);
 
-// 8. Pitcher assignment flow (previously dead UI)
-await page.click('.card:has(.card-title:text("Pitchers")) button:has-text("+ Assign")');
+// 8. Planned pitcher assignment goes through the central policy picker
+await page.click('.card:has(.card-title:text("Planned Pitchers")) button:has-text("+ Assign")');
 await page.waitForSelector('text=Primary Pitchers');
+// Fresh season: everyone should be plainly Eligible (no warnings)
+const eligibleCount = await page.locator('.pitcher-status:has-text("Eligible")').count();
+eligibleCount > 0 ? ok(`policy picker lists ${eligibleCount} eligible pitchers`) : fail('no eligible pitchers listed');
 await page.click('.pitcher-option:not(.disabled)');
 await page.waitForTimeout(300);
-const inn1Pitcher = await page.textContent('.card:has(.card-title:text("Pitchers")) button.btn-primary');
+const inn1Pitcher = await page.textContent('.card:has(.card-title:text("Planned Pitchers")) button.btn-primary');
 inn1Pitcher.includes('Inn 1') ? ok(`pitcher assigned for inning 1 (${inn1Pitcher.trim().replace(/\s+/g, ' ')})`) : fail('pitcher assignment did not stick');
 
-// 9. Save game, check history date display
-await page.click('text=Save Game');
-await page.waitForSelector('.toast:has-text("Game saved")');
-ok('save shows a toast (no native alert)');
-await page.click('.nav-tab:has-text("History")');
+// ============================================
+// 9. LIVE GAME: out tracking, mid-inning change, pitch counts
+// ============================================
+await page.click('button:has-text("Start Game")');
+await page.waitForSelector('.live-panel');
+ok('Start Game enters live out tracking');
+
+// The plan alone must not create any history: completion list comes later.
+// Working pitch count for the inning-1 pitcher
+await page.click('.live-panel button:has-text("Pitches")');
+await page.waitForSelector('.pitch-counter');
+const livePitcherName = (await page.textContent('.pitch-counter-name')).trim();
+for (let i = 0; i < 5; i++) await page.click('.pitch-btn-plus');
+const counted = (await page.textContent('.pitch-counter-display')).trim();
+counted === '5' ? ok(`pitch counter counts to 5 for ${livePitcherName}`) : fail(`pitch counter shows ${counted}`);
+await page.click('.pitch-counter-actions button:has-text("Done")');
+await page.waitForSelector('.pitch-counter', { state: 'detached' });
+
+// Record two defensive outs
+await page.click('button:has-text("Record Defensive Out")');
+await page.click('button:has-text("Record Defensive Out")');
+const filledDots = await page.locator('.out-dot.filled').count();
+filledDots === 2 ? ok('two outs recorded (out dots filled)') : fail(`${filledDots} out dots filled`);
+
+// Mid-inning pitching change: tap the live P chip, put in a new pitcher.
+// Recorded outs must keep the original pitcher.
+await page.click('.live-chip:has(.pos-text.P)');
+await page.waitForSelector('.modal:has-text("Who takes")');
+// Pick a player who is not current and carries no warning marker
+await page.locator('.option-item', { hasNot: page.locator('text=(current)') })
+  .filter({ hasNot: page.locator('text=⚠') })
+  .filter({ hasNot: page.locator('text=cannot') })
+  .first().click();
+await page.waitForTimeout(200);
+const newLivePitcher = (await page.textContent('.live-chip:has(.pos-text.P) .live-chip-name')).trim();
+newLivePitcher && !livePitcherName.startsWith(newLivePitcher)
+  ? ok(`mid-inning pitching change: ${newLivePitcher} now pitching`)
+  : fail(`live pitcher chip shows ${newLivePitcher}`);
+
+// Third out ends the inning; the inning-2 plan takes the field
+await page.click('button:has-text("Record Defensive Out")');
+await page.waitForSelector('.live-panel:has-text("Inning 2 of 6")');
+ok('third out rolls to inning 2 with the planned defense');
+
+// Undo the last out (double-tap protection): back to inning 1, 2 outs
+await page.click('button:has-text("Undo Out")');
+await page.waitForSelector('.live-panel:has-text("Inning 1 of 6")');
+const dotsAfterUndo = await page.locator('.out-dot.filled').count();
+dotsAfterUndo === 2 ? ok('Undo Out restores inning 1 with 2 outs') : fail(`after undo: ${dotsAfterUndo} dots`);
+await page.click('button:has-text("Record Defensive Out")');
+await page.waitForSelector('.live-panel:has-text("Inning 2 of 6")');
+
+// One-tap End Inning records the remaining 3 outs of inning 2
+await page.click('button:has-text("End Inning (3 outs)")');
+await page.waitForSelector('.live-panel:has-text("Inning 3 of 6")');
+ok('End Inning records the rest of the inning in one tap');
+
+// Grid highlights the live inning
+const currentHdr = (await page.textContent('.lineup-cell.header.current')).trim();
+currentHdr === '3' ? ok('plan grid highlights the live inning (3)') : fail(`current inning header: ${currentHdr}`);
+
+// ============================================
+// 10. COMPLETE GAME: mandatory pitch-count confirmation
+// ============================================
+await page.click('button:has-text("Complete Game")');
+await page.waitForSelector('.modal:has-text("Complete Game")');
+const confirmRows = await page.locator('.modal input[type="number"]').count();
+confirmRows >= 2 ? ok(`completion asks to review ${confirmRows} pitcher counts`) : fail(`confirmation rows: ${confirmRows}`);
+
+// The Complete button is locked until every pitcher is explicitly reviewed -
+// an untouched prefill is never accepted as confirmation
+const lockedBtn = page.locator('.modal-footer button', { hasText: /Review \d/ });
+(await lockedBtn.count()) === 1 && (await lockedBtn.isDisabled())
+  ? ok('completion is locked until every pitch count is explicitly reviewed')
+  : fail('completion not locked on unreviewed counts');
+
+// First pitcher: working count (5) offered; coach corrects to 8 and confirms
+const firstInput = page.locator('.modal input[type="number"]').first();
+(await firstInput.inputValue()) === '5'
+  ? ok('working count (5) presented for quick confirmation')
+  : fail(`prefilled count: ${await firstInput.inputValue()}`);
+await firstInput.fill('8');
+await page.locator('.modal button:has-text("Confirm")').first().click();
+await page.waitForSelector('.modal :text("✓ 8")');
+ok('explicit per-pitcher confirmation records the corrected total');
+
+// Second pitcher pitched but has 0 counted: confirming the untouched zero
+// demands a deliberate acknowledgment, not a silent accept
+await page.locator('.modal button:has-text("Confirm")').first().click();
+await page.waitForSelector('.modal:has-text("Confirm Zero Pitches?")');
+ok('a zero count for a real pitcher requires deliberate acknowledgment');
+await page.click('.modal button:has-text("Back")');
+
+// The coach actually has no trustworthy count: the exceptional path needs
+// its own second acknowledgment and promises maximum rest
+await page.locator('button[title="No trustworthy count can be established"]').first().click();
+await page.waitForSelector('.modal:has-text("maximum rest")');
+await page.click('button:has-text("I understand - no count")');
+await page.click('.modal-footer button:has-text("✓ Complete Game")');
+
+// Completion lands on History
+await page.waitForSelector('.card-title:has-text("Past Games")');
+ok('game completed and app navigated to History');
+
+// ============================================
+// 11. HISTORY: actual participation + count corrections
+// ============================================
 await page.waitForSelector('text=Test Tigers');
 const historyText = await page.textContent('.player-item');
 historyText.includes('7/6/2026') ? ok('history shows correct date 7/6/2026') : fail(`history row: "${historyText}"`);
+historyText.includes('pitch count needed') ? ok('unknown count is flagged on the game row') : fail('missing count-needed flag');
+
+await page.locator('.player-item').first().click();
+await page.waitForSelector('text=Actual playing time');
+
+// The mid-inning change shows as partial innings: someone has a ⅓ or ⅔
+const participation = await page.textContent('.stats-table');
+(participation.includes('⅓') || participation.includes('⅔'))
+  ? ok('out-level participation recorded (partial innings visible)')
+  : fail('no partial innings in participation table');
+
+// Confirmed count correction: 8 -> 40 for the first pitcher
+await page.waitForSelector('text=Final pitch counts');
+await page.locator('button:text-is("✏️")').first().click();
+await page.locator('input[aria-label^="Corrected pitches"]').fill('40');
+await page.click('button:has-text("Save")');
+await page.waitForSelector('.toast:has-text("Pitch count corrected")');
+ok('confirmed count corrected from history (8 -> 40)');
+
+// Resolve the unknown count too
+await page.locator('button:text-is("✏️")').last().click();
+await page.locator('input[aria-label^="Corrected pitches"]').fill('12');
+await page.click('button:has-text("Save")');
+await page.waitForTimeout(200);
+const stillNeeded = await page.locator('text=count needed').count();
+stillNeeded === 0 ? ok('unknown count resolved via history correction') : fail('count-needed flag still present');
+
+// Participation corrections: delete a recorded out, then insert one back
+await page.click('button:has-text("Fix Participation")');
+await page.waitForSelector('text=Inn 1 · out 1');
+const outRowsBefore = await page.locator('button[title="Delete this out"]').count();
+await page.locator('button[title="Delete this out"]').first().click();
+await page.waitForSelector('.modal:has-text("Remove this recorded out?")');
+await page.click('.modal button:has-text("Delete Out")');
+await page.waitForTimeout(200);
+const outRowsAfterDelete = await page.locator('button[title="Delete this out"]').count();
+outRowsAfterDelete === outRowsBefore - 1
+  ? ok('participation editor deletes a recorded out (ledger resequenced)')
+  : fail(`out rows ${outRowsBefore} -> ${outRowsAfterDelete}`);
+await page.locator('button[title^="Insert a missed out"]').first().click();
+await page.waitForTimeout(200);
+const outRowsAfterInsert = await page.locator('button[title="Delete this out"]').count();
+outRowsAfterInsert === outRowsBefore
+  ? ok('participation editor inserts a missed out')
+  : fail(`out rows after insert: ${outRowsAfterInsert}`);
+
+// Correct one out's formation through the editor
+await page.locator('button[title="Correct this out\'s formation"]').first().click();
+await page.waitForSelector('.modal:has-text("Inning 1 · Out 1")');
+await page.click('.modal button:has-text("Save Correction")');
+await page.waitForTimeout(200);
+ok('out formation editor opens and saves');
+await page.click('button:has-text("Done Editing")');
+
+// Delete asks for confirmation and can be cancelled
+await page.click('button:has-text("Delete Game")');
+await page.waitForSelector('.modal:has-text("pitching workload disappear")');
+await page.click('.modal button:has-text("Cancel")');
+await page.waitForSelector('button:has-text("Delete Game")');
+ok('game delete confirms and cancels cleanly');
 
 // ============================================
-// Phase 4: pitch counter + season stats
+// 12. STATS: derived from recorded outs and confirmed counts
 // ============================================
-await page.click('.nav-tab:has-text("Game")');
-await page.waitForSelector('text=Continue Current Game');
-await page.click('text=Continue Current Game');
-await page.waitForSelector('.lineup-grid');
-
-// Open the inning-1 pitcher's cell and count 5 pitches
-await page.locator('.lineup-grid .pos-text.P').first().click();
-await page.waitForSelector('text=Pitch Counter');
-await page.click('text=Pitch Counter');
-await page.waitForSelector('.pitch-counter');
-for (let i = 0; i < 5; i++) await page.click('.pitch-btn-plus');
-const counted = (await page.textContent('.pitch-counter-display')).trim();
-counted === '5' ? ok('pitch counter counts to 5') : fail(`pitch counter shows ${counted}`);
-await page.click('text=End Inning');
-
-// Next Inning flow: advances the inning, auto-opens the counter for the
-// incoming pitcher, and persists counts even when the coach just closes it
-await page.waitForSelector('button:has-text("Next Inning (2)")');
-await page.click('button:has-text("Next Inning (2)")');
-await page.waitForSelector('.pitch-counter');
-const inn2Pitcher = (await page.textContent('.pitch-counter-name')).trim();
-ok(`next inning auto-opens the counter (${inn2Pitcher} pitching inning 2)`);
-
-const pitchesBefore = parseInt(await page.textContent('.pitch-counter-display'), 10);
-await page.click('.pitch-btn-plus');
-await page.click('.pitch-btn-plus');
-const pitchesAfter = parseInt(await page.textContent('.pitch-counter-display'), 10);
-pitchesAfter - pitchesBefore === 2 ? ok('counter tracks pitches in the new inning') : fail(`counter went ${pitchesBefore} -> ${pitchesAfter}`);
-
-// Close WITHOUT End Inning - the coach can always dismiss it
-await page.click('.pitch-counter-actions button:has-text("Close")');
-await page.waitForSelector('.pitch-counter', { state: 'detached' });
-ok('auto-opened counter can be dismissed without ending the inning');
-
-let currentHdr = (await page.textContent('.lineup-cell.header.current')).trim();
-currentHdr === '2' ? ok('grid highlights inning 2 as current') : fail(`current inning header: ${currentHdr}`);
-
-// Advancing again must persist the dismissed counter's pitches automatically
-await page.click('button:has-text("Next Inning (3)")');
-await page.waitForSelector('.pitch-counter');
-await page.click('.pitch-counter-actions button:has-text("Close")');
-currentHdr = (await page.textContent('.lineup-cell.header.current')).trim();
-currentHdr === '3' ? ok('second advance lands on inning 3') : fail(`current inning header: ${currentHdr}`);
-
-// Stats tab
 await page.click('.nav-tab:has-text("Stats")');
 await page.waitForSelector('text=Playing Time by Position');
 
-// 5 counted in inning 1 (End Inning) + 2 in inning 2 (persisted by Next Inning)
+// 40 + 12 confirmed pitches
 const kpiPitches = (await page.locator('.stat-card:has(.stat-label:text-is("Pitches")) .stat-value').textContent()).trim();
-kpiPitches === '7' ? ok('KPI shows 7 pitches (incl. counts persisted by Next Inning)') : fail(`Pitches KPI: ${kpiPitches}`);
+kpiPitches === '52' ? ok('Pitches KPI reflects corrected confirmed counts (52)') : fail(`Pitches KPI: ${kpiPitches}`);
+
+// 2 recorded innings x 12 players = 72 outs = 24 player-innings
+const kpiInnings = (await page.locator('.stat-card:has(.stat-label:text-is("Player-Innings Tracked")) .stat-value').textContent()).trim();
+kpiInnings === '24' ? ok('Player Innings KPI derives from recorded outs (24)') : fail(`Player Innings KPI: ${kpiInnings}`);
 
 const segCount = await page.locator('.hbar-seg').count();
 segCount >= 12 ? ok(`position distribution renders (${segCount} segments)`) : fail(`only ${segCount} segments`);
@@ -191,14 +316,18 @@ const tableRows = await page.locator('.card:has-text("Playing Time") .stats-tabl
 tableRows === 12 ? ok('table view lists all 12 players') : fail(`table rows: ${tableRows}`);
 await page.locator('.card:has-text("Playing Time")').locator('button:has-text("Chart")').click();
 
-// Range filter scopes the cards
+// Range filter scopes the cards: the game is pinned to 2026-07-06, so the
+// rolling 7-day window excludes it while Full Season includes it
+const gamesKpi = () => page.locator('.stat-card:has(.stat-label:text-is("Games Tracked")) .stat-value').textContent();
+const kpiGamesSeason = (await gamesKpi()).trim();
+kpiGamesSeason === '1' ? ok('full-season filter includes the completed game') : fail(`Games KPI (season): ${kpiGamesSeason}`);
 await page.click('button:has-text("Last 7 Days")');
 await page.waitForTimeout(200);
-const kpiGames7 = (await page.locator('.stat-card:has(.stat-label:text-is("Games")) .stat-value').textContent()).trim();
-kpiGames7 === '1' ? ok('7-day filter keeps today\'s game in scope') : fail(`Games KPI at 7d: ${kpiGames7}`);
+const kpiGames7 = (await gamesKpi()).trim();
+kpiGames7 === '0' ? ok('7-day filter scopes the past game out') : fail(`Games KPI at 7d: ${kpiGames7}`);
 await page.click('button:has-text("Full Season")');
 
-await page.screenshot({ path: (process.env.SCRATCH || '.e2e-artifacts') + '/stats-light.png', fullPage: true });
+await page.screenshot({ path: join(ARTIFACTS, 'stats-light.png'), fullPage: true });
 
 // Dark theme render
 await page.click('.nav-tab:has-text("Settings")');
@@ -206,13 +335,13 @@ await page.waitForSelector('text=Dark Mode');
 await page.locator('.card:has-text("Display") .toggle-track').click();
 await page.click('.nav-tab:has-text("Stats")');
 await page.waitForSelector('text=Playing Time by Position');
-await page.screenshot({ path: (process.env.SCRATCH || '.e2e-artifacts') + '/stats-dark.png', fullPage: true });
+await page.screenshot({ path: join(ARTIFACTS, 'stats-dark.png'), fullPage: true });
 await page.click('.nav-tab:has-text("Settings")');
 await page.locator('.card:has-text("Display") .toggle-track').click(); // back to light
 ok('stats view renders in dark mode');
 
 // ============================================
-// Phase 5: data safety - backup, restore, history detail
+// 13. Data safety - account card, backup, restore
 // ============================================
 // Account & Sync card renders signed-out; the app never requires an account
 await page.waitForSelector('text=Account & Sync');
@@ -229,12 +358,19 @@ backupName.startsWith('diamond-lineup-backup-') && backupName.endsWith('.json')
   ? ok(`backup downloads as ${backupName}`)
   : fail(`backup filename: ${backupName}`);
 const backup = JSON.parse(readFileSync(await download.path(), 'utf8'));
-(backup.roster?.length === 12 && backup.games?.length === 1)
-  ? ok('backup contains the roster and saved game')
-  : fail(`backup shape: roster=${backup.roster?.length} games=${backup.games?.length}`);
+(backup.app === 'diamond-lineup' && backup.version === 2 && backup.data?.roster?.length === 12 && backup.data?.games?.length === 1)
+  ? ok('versioned backup contains the roster and completed game')
+  : fail(`backup shape: app=${backup.app} v=${backup.version} roster=${backup.data?.roster?.length} games=${backup.data?.games?.length}`);
+
+// A malformed file is rejected with the device untouched
+const badPath = join(ARTIFACTS, 'bad-backup.json');
+writeFileSync(badPath, JSON.stringify({ roster: 'corrupt' }));
+await page.setInputFiles('input[type="file"]', badPath);
+await page.waitForSelector('.toast:has-text("Couldn\'t restore")');
+ok('malformed backup rejected before any write');
 
 // Restore round-trip: modify the backup, import it, verify it went live
-backup.roster[0] = { ...backup.roster[0], name: 'Imported Kid' };
+backup.data.roster[0] = { ...backup.data.roster[0], name: 'Imported Kid' };
 const modPath = join(ARTIFACTS, 'modified-backup.json');
 writeFileSync(modPath, JSON.stringify(backup));
 await page.setInputFiles('input[type="file"]', modPath);
@@ -248,23 +384,7 @@ await page.click('.nav-tab:has-text("Roster")');
 await page.waitForSelector('text=Imported Kid');
 ok('restore round-trip: imported data is live');
 
-// History: expandable game detail with read-only lineup
-await page.click('.nav-tab:has-text("History")');
-await page.locator('.player-item').first().click();
-await page.waitForSelector('button:has-text("Delete Game")');
-const snapshotCells = await page.locator('.lineup-grid .pos-text').count();
-snapshotCells >= 60
-  ? ok(`game detail shows the saved lineup (${snapshotCells} cells)`)
-  : fail(`snapshot cells: ${snapshotCells}`);
-
-// Delete asks for confirmation and can be cancelled
-await page.click('button:has-text("Delete Game")');
-await page.waitForSelector('.modal:has-text("Season stats will no longer include it")');
-await page.click('.modal button:has-text("Cancel")');
-await page.waitForSelector('button:has-text("Delete Game")');
-ok('game delete confirms and cancels cleanly');
-
-// 10. Persistence across reload
+// Persistence across reload
 await page.reload();
 await page.waitForSelector('.nav-title');
 await page.click('.nav-tab:has-text("Roster")');
@@ -272,7 +392,7 @@ const persisted = await page.locator('.player-item').count();
 persisted === 12 ? ok('roster persisted across reload') : fail(`after reload roster has ${persisted} players`);
 
 // ============================================
-// Phase 1: softball 10-fielder flow
+// 14. Softball 10-fielder flow (draft planning)
 // ============================================
 await page.click('.nav-tab:has-text("Settings")');
 await page.waitForSelector('text=Sport & Field');
@@ -300,19 +420,26 @@ await fairnessCard.locator('select').nth(2).selectOption('1'); // max consecutiv
 await fairnessCard.locator('.toggle-track').click(); // everyone plays infield
 ok('fairness rules enabled (consecutive sits 1, everyone infield)');
 
-// Start a new softball game (discarding the current one requires confirmation)
+// Build a softball draft (the completed game left no active game)
 await page.click('.nav-tab:has-text("Game")');
-await page.waitForSelector('text=Start New Game');
-await page.click('text=Start New Game');
-await page.waitForSelector('.modal:has-text("Discard the current game")');
-ok('starting a new game asks before discarding the current one');
-await page.click('button:has-text("Discard & Start New")');
 await page.waitForSelector('text=Set Batting Order');
 await page.click('text=Start Blank');
 await page.waitForSelector('input[type="date"]');
 await page.click('text=Continue to Lineup');
 await page.waitForSelector('text=Start Lineup');
 await page.click('text=Auto-Generate');
+await page.waitForSelector('.lineup-grid');
+
+// Leaving and returning to a draft offers continue/discard, and discarding
+// requires confirmation (abandoned games leave no history)
+await page.click('.nav-tab:has-text("Roster")');
+await page.click('.nav-tab:has-text("Game")');
+await page.waitForSelector('text=Continue Current Game');
+await page.click('text=Start New Game');
+await page.waitForSelector('.modal:has-text("Discard the current game")');
+ok('starting a new game asks before discarding the current one');
+await page.click('.modal button:has-text("Cancel")');
+await page.click('text=Continue Current Game');
 await page.waitForSelector('.lineup-grid');
 
 // 12 players x 6 innings, 10 fielders per inning incl SC
@@ -350,10 +477,10 @@ for (let row = 0; row < 12; row++) {
 }
 infieldOk ? ok('every player gets at least one infield inning') : fail('a player never plays infield');
 
-await page.screenshot({ path: (process.env.SCRATCH || '.e2e-artifacts') + '/softball-lineup.png', fullPage: true });
+await page.screenshot({ path: join(ARTIFACTS, 'softball-lineup.png'), fullPage: true });
 
 // ============================================
-// Phase 3: print emulation
+// 15. Print emulation
 // ============================================
 await page.emulateMedia({ media: 'print' });
 const scoreVis = await page.locator('.score-value').first().evaluate(el => getComputedStyle(el).visibility);
@@ -362,13 +489,11 @@ const printHeaderVisible = await page.locator('.print-header').evaluate(el => ge
 printHeaderVisible === 'block' ? ok('print header shows in print media') : fail(`print header display: ${printHeaderVisible}`);
 const navPrint = await page.locator('.nav').evaluate(el => getComputedStyle(el).display);
 navPrint === 'none' ? ok('nav hidden in print') : fail(`nav display in print: ${navPrint}`);
-const colBg = await page.locator('.lineup-cell.current-col').first().evaluate(el => getComputedStyle(el).backgroundColor);
-colBg === 'rgb(255, 255, 255)' ? ok('current-inning highlight removed on paper') : fail(`current-col print bg: ${colBg}`);
-await page.screenshot({ path: (process.env.SCRATCH || '.e2e-artifacts') + '/print-preview.png', fullPage: true });
+await page.screenshot({ path: join(ARTIFACTS, 'print-preview.png'), fullPage: true });
 await page.emulateMedia({ media: 'screen' });
 
 // ============================================
-// Phase 3: mobile viewport (iPhone-sized, touch)
+// 16. Mobile viewport (iPhone-sized, touch)
 // ============================================
 const mobile = await browser.newContext({
   viewport: { width: 390, height: 844 },
@@ -431,8 +556,14 @@ await mpage.waitForSelector('.lineup-grid');
 const stickyPos = await mpage.locator('.lineup-cell.player-col').first().evaluate(el => getComputedStyle(el).position);
 stickyPos === 'sticky' ? ok('player column is sticky on mobile') : fail(`player-col position: ${stickyPos}`);
 
-const currentHeader = await mpage.locator('.lineup-cell.header.current').count();
-currentHeader === 1 ? ok('current inning column is highlighted') : fail(`current header cells: ${currentHeader}`);
+// Start the game on mobile: live panel + one-thumb out recording
+await mpage.click('button:has-text("Start Game")');
+await mpage.waitForSelector('.live-panel');
+await mpage.locator('button:has-text("Record Defensive Out")').tap();
+const mDots = await mpage.locator('.out-dot.filled').count();
+mDots === 1 ? ok('mobile: Record Out works with a tap') : fail(`mobile out dots: ${mDots}`);
+const mHdr = await mpage.locator('.lineup-cell.header.current').count();
+mHdr === 1 ? ok('mobile: live inning highlighted in the grid') : fail(`mobile current headers: ${mHdr}`);
 
 // Cell tap opens a bottom-sheet modal
 await mpage.locator('.lineup-grid .lineup-cell:not(.header):not(.player-col)').first().tap();
@@ -447,7 +578,7 @@ const modalRect = await mpage.locator('.modal').evaluate(el => {
   : fail(`modal rect: ${JSON.stringify(modalRect)}`);
 await mpage.keyboard.press('Escape');
 
-await mpage.screenshot({ path: (process.env.SCRATCH || '.e2e-artifacts') + '/mobile-lineup.png', fullPage: false });
+await mpage.screenshot({ path: join(ARTIFACTS, 'mobile-live-game.png'), fullPage: false });
 await mobile.close();
 
 if (errors.length) fail('console errors: ' + errors.join(' | '));

@@ -3,18 +3,18 @@
    ============================================ */
 
 import React from 'react';
-import { todayISO } from '../domain/dates';
 import { AppContext } from '../state/AppContext';
 import { Storage } from '../services/storage';
+import { backupFilename, buildBackup, restoreBackup, validateBackup } from '../services/backup';
+import { clearSyncMeta, Sync } from '../services/sync';
 import { CUSTOM_PRESET_ID, getPreset, getPresetsForSport } from '../domain/presets';
 import { AccountCard } from '../components/AccountCard';
 import { ConfirmDialog, Toggle } from '../components/ui';
 
 export function SettingsView() {
-  const { settings, setSettings, roster, showToast } = React.useContext(AppContext);
-  // Bump to re-read Storage-backed values (default batting order) after changes
-  const [, setRefresh] = React.useState(0);
+  const { settings, setSettings, roster, defaultBattingOrder, setDefaultBattingOrder, user, showToast } = React.useContext(AppContext);
   const [confirmClearAll, setConfirmClearAll] = React.useState(false);
+  const [clearing, setClearing] = React.useState(false);
   const [importPending, setImportPending] = React.useState(null);
   const importInputRef = React.useRef(null);
 
@@ -76,16 +76,14 @@ export function SettingsView() {
     }
   };
 
+  // Through context state so it persists AND syncs like everything else (M3)
   const handleSaveDefaultOrder = () => {
-    const currentOrder = roster.map(p => p.id);
-    Storage.saveDefaultBattingOrder(currentOrder);
-    setRefresh(n => n + 1);
+    setDefaultBattingOrder(roster.map(p => p.id));
     showToast('Default batting order saved');
   };
 
   const handleClearDefaultOrder = () => {
-    Storage.clearDefaultBattingOrder();
-    setRefresh(n => n + 1);
+    setDefaultBattingOrder(null);
     showToast('Default batting order cleared');
   };
 
@@ -94,12 +92,12 @@ export function SettingsView() {
   // ----------------------------------------
 
   const handleExport = () => {
-    const data = Storage.exportAllData();
+    const data = buildBackup();
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `diamond-lineup-backup-${todayISO()}.json`;
+    a.download = backupFilename();
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -115,18 +113,12 @@ export function SettingsView() {
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        const data = JSON.parse(reader.result);
-        if (typeof data !== 'object' || data === null || !Array.isArray(data.roster)) {
-          throw new Error('not a Diamond Lineup backup');
-        }
-        setImportPending({
-          data,
-          summary: `${data.roster.length} players, ${data.games?.length || 0} saved games, ` +
-                   `${data.pitchHistory?.length || 0} pitch records` +
-                   (data.exportDate ? ` (exported ${data.exportDate.split('T')[0]})` : '')
-        });
+        // Full validation + migration happens in memory BEFORE any write;
+        // a bad file is rejected here with the device untouched (H11)
+        const validated = validateBackup(JSON.parse(reader.result));
+        setImportPending(validated);
       } catch (err) {
-        showToast(`Couldn't read that file: ${err.message}`, 'error');
+        showToast(`Couldn't restore that file: ${err.message}`, 'error');
       }
     };
     reader.onerror = () => showToast("Couldn't read that file", 'error');
@@ -134,17 +126,38 @@ export function SettingsView() {
   };
 
   const handleImportConfirm = () => {
-    const ok = Storage.importAllData(importPending.data);
+    const ok = restoreBackup(importPending);
     setImportPending(null);
     if (ok) {
+      // The restored data should win the next sync
+      Sync.markAllDirty();
       // Reload so all state re-initializes from the imported data
       window.location.reload();
     } else {
-      showToast('Import failed - nothing was changed', 'error');
+      showToast('Restore failed - your existing data was left unchanged', 'error');
     }
   };
 
-  const defaultOrder = Storage.getDefaultBattingOrder();
+  // Clear-all must not resurrect from the cloud on next launch: when signed
+  // in, the account copy is tombstoned first (other devices clear too). If
+  // that fails, nothing is deleted anywhere (H2).
+  const handleClearAll = async () => {
+    setClearing(true);
+    try {
+      if (user) {
+        await Sync.clearCloud();
+      }
+      Storage.clearAllData();
+      clearSyncMeta();
+      window.location.reload();
+    } catch (e) {
+      setClearing(false);
+      setConfirmClearAll(false);
+      showToast(`Couldn't clear the account copy (${e.message || 'network error'}) - nothing was deleted`, 'error');
+    }
+  };
+
+  const defaultOrder = defaultBattingOrder;
   const presets = getPresetsForSport(settings.sport);
   const { pitchRules } = settings;
 
@@ -524,10 +537,15 @@ export function SettingsView() {
       {confirmClearAll && (
         <ConfirmDialog
           title="Clear All Data"
-          message="Delete ALL data? This includes your roster, saved games, pitch history, and settings. This cannot be undone - consider downloading a backup first."
-          confirmLabel="Delete Everything"
+          message={
+            (user
+              ? 'Delete ALL data from this device AND your account (all synced devices)? '
+              : 'Delete ALL data from this device? ') +
+            'This includes your roster, saved games, and settings. This cannot be undone - consider downloading a backup first.'
+          }
+          confirmLabel={clearing ? 'Deleting…' : 'Delete Everything'}
           danger
-          onConfirm={() => { Storage.clearAllData(); window.location.reload(); }}
+          onConfirm={handleClearAll}
           onCancel={() => setConfirmClearAll(false)}
         />
       )}

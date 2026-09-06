@@ -1,41 +1,40 @@
 /* ============================================
    Diamond Lineup - Pitchers Summary View
+
+   Workload and rest eligibility come from completed games only
+   (derived outings), through the central pitching policy.
+   An outing with an unconfirmed pitch count is flagged - it is
+   never treated as zero.
    ============================================ */
 
 import React from 'react';
 import { compareDatesDesc, formatDateDisplay, todayISO } from '../domain/dates';
+import { formatOutsAsInnings } from '../domain/games';
+import { assessPitcherRest, deriveOutings } from '../domain/pitching';
 import { AppContext } from '../state/AppContext';
-import { Storage } from '../services/storage';
 import { EmptyState, PlayerTag } from '../components/ui';
 
 export function PitchersView() {
-  const { roster, pitchHistory } = React.useContext(AppContext);
+  const { roster, games, settings } = React.useContext(AppContext);
   const [expandedPitcher, setExpandedPitcher] = React.useState(null);
   const gameDate = todayISO();
 
   const pitchers = roster.filter(p => p.canPitch);
+  const outings = React.useMemo(() => deriveOutings(games), [games]);
 
   const getPitcherStats = (playerId) => {
-    const records = pitchHistory.filter(r => r.playerId === playerId);
-    const totalPitches = records.reduce((sum, r) => sum + (r.pitches || 0), 0);
+    const records = outings.filter(o => o.playerId === playerId);
+    const confirmed = records.filter(o => o.pitches !== null);
+    const totalPitches = confirmed.reduce((sum, o) => sum + o.pitches, 0);
+    const unknownGames = records.length - confirmed.length;
     const gamesCount = records.length;
-    const avgPitchesPerGame = gamesCount > 0 ? Math.round(totalPitches / gamesCount) : 0;
+    const avgPitchesPerGame = confirmed.length > 0 ? Math.round(totalPitches / confirmed.length) : 0;
 
-    // Get recent games (last 5)
     const recentGames = [...records]
       .sort((a, b) => compareDatesDesc(a.date, b.date))
       .slice(0, 5);
 
-    return { totalPitches, gamesCount, avgPitchesPerGame, recentGames };
-  };
-
-  const getRestInfo = (playerId) => {
-    const eligibility = Storage.getPitcherEligibility(playerId, gameDate);
-    if (eligibility.eligible) {
-      return { status: 'Ready', days: eligibility.daysRest, color: 'var(--success)' };
-    } else {
-      return { status: `${eligibility.daysNeeded}d rest needed`, days: eligibility.daysRest, color: 'var(--warning)' };
-    }
+    return { totalPitches, gamesCount, unknownGames, avgPitchesPerGame, recentGames };
   };
 
   return (
@@ -54,8 +53,7 @@ export function PitchersView() {
           ) : (
             pitchers.map(pitcher => {
               const stats = getPitcherStats(pitcher.id);
-              const eligibility = Storage.getPitcherEligibility(pitcher.id, gameDate);
-              const restInfo = getRestInfo(pitcher.id);
+              const eligibility = assessPitcherRest(pitcher.id, gameDate, games, settings.pitchRules);
               const isExpanded = expandedPitcher === pitcher.id;
 
               return (
@@ -79,10 +77,17 @@ export function PitchersView() {
                         <PlayerTag type={eligibility.eligible ? 'eligible' : 'ineligible'}>
                           {eligibility.reason}
                         </PlayerTag>
+                        {stats.unknownGames > 0 && (
+                          <PlayerTag type="ineligible">
+                            {stats.unknownGames} count{stats.unknownGames === 1 ? '' : 's'} needed
+                          </PlayerTag>
+                        )}
                       </div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
-                      <div style={{ fontWeight: 600 }}>{stats.totalPitches} pitches</div>
+                      <div style={{ fontWeight: 600 }}>
+                        {stats.totalPitches}{stats.unknownGames > 0 ? '+?' : ''} pitches
+                      </div>
                       <div className="text-muted text-small">{stats.gamesCount} games</div>
                     </div>
                   </div>
@@ -101,7 +106,9 @@ export function PitchersView() {
                         marginBottom: '12px'
                       }}>
                         <div style={{ textAlign: 'center' }}>
-                          <div style={{ fontSize: '20px', fontWeight: 600 }}>{stats.totalPitches}</div>
+                          <div style={{ fontSize: '20px', fontWeight: 600 }}>
+                            {stats.totalPitches}{stats.unknownGames > 0 ? '+?' : ''}
+                          </div>
                           <div className="text-muted text-small">Total Pitches</div>
                         </div>
                         <div style={{ textAlign: 'center' }}>
@@ -109,17 +116,21 @@ export function PitchersView() {
                           <div className="text-muted text-small">Avg/Game</div>
                         </div>
                         <div style={{ textAlign: 'center' }}>
-                          <div style={{ fontSize: '20px', fontWeight: 600, color: restInfo.color }}>
-                            {eligibility.eligible ? '✓' : restInfo.status}
+                          <div style={{
+                            fontSize: '20px',
+                            fontWeight: 600,
+                            color: eligibility.eligible ? 'var(--success)' : 'var(--warning)'
+                          }}>
+                            {eligibility.eligible ? '✓' : eligibility.reason}
                           </div>
                           <div className="text-muted text-small">
-                            {restInfo.days !== null ? `${restInfo.days}d since last` : 'No history'}
+                            {eligibility.daysRest !== null ? `${eligibility.daysRest}d since last` : 'No history'}
                           </div>
                         </div>
                       </div>
 
-                      {/* Recent Games */}
-                      {stats.recentGames.length > 0 && (
+                      {/* Recent outings */}
+                      {stats.recentGames.length > 0 ? (
                         <div>
                           <div className="text-muted text-small" style={{ marginBottom: '8px' }}>Recent Games</div>
                           {stats.recentGames.map((record, idx) => (
@@ -132,14 +143,20 @@ export function PitchersView() {
                                 borderBottom: idx < stats.recentGames.length - 1 ? '1px solid var(--border-light)' : 'none'
                               }}
                             >
-                              <span className="text-small">{formatDateDisplay(record.date)}</span>
-                              <span className="text-small" style={{ fontWeight: 500 }}>{record.pitches} pitches</span>
+                              <span className="text-small">
+                                {formatDateDisplay(record.date)}
+                                {record.estimated ? ' (est.)' : ''}
+                              </span>
+                              <span className="text-small" style={{ fontWeight: 500 }}>
+                                {record.pitches === null
+                                  ? 'count needed'
+                                  : `${record.pitches} pitches`}
+                                {record.pitchingOuts > 0 ? ` · ${formatOutsAsInnings(record.pitchingOuts)} inn` : ''}
+                              </span>
                             </div>
                           ))}
                         </div>
-                      )}
-
-                      {stats.recentGames.length === 0 && (
+                      ) : (
                         <div className="text-muted text-small">No pitching history recorded</div>
                       )}
                     </div>

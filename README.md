@@ -14,7 +14,8 @@ territory). This is lineup logistics only.
 ```bash
 npm install
 npm run dev        # local dev server
-npm test           # unit tests (solver, eligibility, dates)
+npm test           # unit tests (solver, pitching policy, out ledger,
+                   # migration, sync decisions, backup validation)
 npm run build      # type-check + production build to dist/
 npm run preview    # serve the production build locally
 npm run test:e2e   # browser E2E suite (build + preview on :4173 first;
@@ -23,9 +24,9 @@ npm run test:e2e   # browser E2E suite (build + preview on :4173 first;
 
 The app is an installable PWA: coaches can add it to their phone's home
 screen and it works offline in the dugout (all assets are precached by a
-service worker; data lives locally until cloud sync arrives in Phase 2).
-Settings → Backup & Restore downloads the whole season as a JSON file and
-restores it on another device — the manual laptop↔phone bridge until sync.
+service worker; data is local-first and syncs when signed in).
+Settings → Backup & Restore downloads the whole season as a versioned JSON
+file; restores are fully validated in memory and applied atomically.
 
 CI (GitHub Actions) runs the type-check, build, unit tests, and the full
 browser E2E suite on every push.
@@ -36,28 +37,76 @@ The app is local-first and fully usable without an account. Sync uses
 Supabase (Settings → Account & Sync):
 
 1. **Create the database schema**: in the Supabase dashboard open
-   *SQL Editor → New query*, paste the contents of
-   `supabase/migrations/0001_init.sql`, and click **Run**. This creates the
-   `teams` / `team_members` / `team_data` tables with row-level security so
-   each account can only read its own team's data.
-2. **(Recommended for beta)** *Authentication → Sign In / Providers → Email*:
-   turn **off** "Confirm email" so coaches can sign in immediately after
-   creating an account.
+   *SQL Editor → New query* and run, in order,
+   `supabase/migrations/0001_init.sql` and
+   `supabase/migrations/0002_atomic_team_provisioning.sql`. This creates the
+   `teams` / `team_members` / `team_data` tables with row-level security and
+   an atomic get-or-create function so two devices signing into a brand-new
+   account can never split it into two teams.
+2. **Keep email confirmation ON** for an external beta (*Authentication →
+   Sign In / Providers → Email*): the app shows a durable "check your email"
+   state with a resend button. Configure the production **Site URL** and
+   allowed redirect URLs (for confirmation and password-reset links), email
+   delivery, and set the **password policy minimum to 8 characters**
+   (*Authentication → Policies*) - the app's client-side validation mirrors
+   that minimum, but Supabase is the authoritative enforcer.
 3. The app ships with the project URL and publishable key baked in (safe:
    access control is enforced server-side by RLS). To point at a different
    Supabase project, set `VITE_SUPABASE_URL` and
    `VITE_SUPABASE_PUBLISHABLE_KEY` at build time.
 
-Sync model: last-write-wins per storage key. An empty account is seeded by
-the first device that signs in; a device signing in for the first time
-adopts the account's data; after that, whichever side changed most recently
-wins. Changes push automatically (debounced) and every app launch pulls.
+Teams: one account can run several teams (the 10U team and the 7U team).
+Settings → Account & Sync shows which team the device is working with,
+switches between teams (switching replaces the device's data with that
+team's cloud copy - never merging), and creates new teams. The device
+remembers which account and team its local data belongs to; a different
+account signing in on a shared device must explicitly choose to replace
+the data - it is never uploaded across the account boundary.
+
+Sync model: per-key reconciliation. Each storage key tracks its own local
+dirty state and the server timestamp it last saw, so a change to one key
+can never overwrite another; cleared values propagate as null tombstones;
+writes are serialized per key, retried on failure, and bound to the signed-
+in identity. Dirty flags survive sign-out, so offline edits sync on the
+next sign-in to the same account instead of being lost. A true
+both-sides-changed conflict resolves last-write-wins for that key only,
+and React state reloads whenever a remote winner is applied. Changes push
+automatically (debounced) and every app launch pulls.
 
 ## Deploying (Vercel)
 
 Import the GitHub repo in Vercel; it auto-detects Vite (build
 `npm run build`, output `dist/`). No environment variables are required.
 Vercel deploys the repo's production branch (`main`) on every push.
+
+After a deploy, coaches should **fully close and reopen the app** (or the
+installed PWA) so the new service worker activates. Do not tell them to
+clear site data — that would wipe the device's local season.
+
+The v1 → v2 data migration is **forward-only**: once a device has written
+v2 data, do not roll it back to a pre-migration build. Ship a forward fix
+instead.
+
+## Running the beta
+
+Guidance to give each beta coach:
+
+1. **Add it to your home screen** (Share → Add to Home Screen on iOS, or
+   the install prompt on Android/desktop). It works offline in the dugout.
+2. **One device at a time during a game.** Run the game on the phone, then
+   tap **Sync Now** before picking it up on the laptop. Two devices editing
+   the same season at once resolves per key, last write wins — fine, but
+   not what you want mid-game.
+3. **Download a backup after each game** (Settings → Backup & Restore).
+   It is the belt-and-suspenders copy, and the only way to move data
+   between two accounts.
+4. **Complete games, don't discard them.** Only a completed game creates
+   history, workload, and rest eligibility. Discarding leaves no trace by
+   design — if real innings were played, use Complete Game (a shortened
+   game completes fine after any number of outs).
+5. **Fix mistakes in place.** Undo Out during the game; History → Fix
+   Participation afterwards; pitch counts stay correctable forever and
+   re-derive eligibility immediately.
 
 ## Architecture
 
@@ -69,8 +118,10 @@ src/
     solver.ts      #   Constraint solver for defensive lineups
     dates.ts       #   Local-calendar-date utilities (see note below)
   services/
-    storage.ts     # Persistence layer (localStorage today; designed to be
-                   # swapped for an API/sync backend)
+    storage.ts     # Persistence layer (localStorage; migrates v1 data on read)
+    sync.ts        # Per-key cloud sync (Supabase)
+    migrate.ts     # v1 -> v2 game-model migration
+    backup.ts      # Versioned backup export + validated atomic restore
   state/           # React context (global app state)
   components/      # Reusable UI + feature modals + lineup grid
   views/           # Screens: Roster, Game Setup, Lineup, Pitchers, History, Settings
@@ -89,14 +140,39 @@ override prompt), sit counts spread evenly, optional fairness rules (max
 consecutive sits, everyone plays infield at least once — with warnings when
 they can't be met), position preferences honored.
 
+### Plan vs. actual (the core data rule)
+
+The lineup grid is a **plan** in innings. Actual participation is recorded
+live in **defensive outs**: each "Record Out" tap snapshots who was standing
+where, so a pitcher who throws one out and moves to first base is credited
+P ⅓ + 1B ⅔. Only *completed* games feed history, season stats, and rest
+eligibility — drafts, live games, and abandoned games contribute nothing.
+Games completed before out tracking existed are migrated as *estimated*
+participation (three outs per planned inning) and labeled as such.
+Recorded participation stays correctable: History → Fix Participation
+edits, inserts, or deletes out snapshots, and everything derived
+(fairness, innings pitched, eligibility) recomputes from the ledger.
+
 ### Pitching rules
 
 League presets (Pitch Smart age bands used by Little League / Cal Ripken /
 PONY, plus softball no-limit and innings-based schemes) live in
 `src/domain/presets.ts`; editing any value switches to Custom. Three limit
 types: pitch-count breakpoints, innings-pitched breakpoints, or none.
-Saving a game records innings pitched from the lineup automatically, so
-rest tracking works even when the pitch counter isn't used.
+
+The in-game counter keeps a **working** count (correctable directly). At
+game completion every pitcher must be **explicitly reviewed** - the
+working count is offered for one-tap confirmation, but an untouched
+prefill is never accepted (the domain layer rejects unreviewed
+completions). Confirming a zero for a player who actually pitched takes a
+deliberate acknowledgment, and "no count can be established" is an
+exceptional path with its own acknowledgment - never treated as zero:
+eligibility assumes the maximum applicable rest until the count is
+corrected from History. All eligibility flows through one policy module
+(`src/domain/pitching.ts`): pregame rest from prior completed games
+(same-day outings aggregated), daily pitch max, and per-game caps — every
+assignment path (solver, pickers, live changes) warns through it, and
+overriding is always explicit.
 
 ### Dates
 
@@ -125,4 +201,17 @@ the *previous day* in US timezones.
 - [x] **Hardening** – JSON backup/restore, game history detail + delete,
       in-app dialogs and toasts (no native popups), discard-game guardrail,
       crash-safe error boundary, CI pipeline
-- [ ] **Phase 5** – Hosted beta on Vercel; payments later
+- [x] **Beta reliability pass** – out-level actual participation (plan in
+      innings, record in outs), mandatory pitch-count confirmation with
+      history corrections, centralized pitching policy, per-key sync
+      protocol with tombstones and identity binding, validated atomic
+      restore, atomic team provisioning
+- [x] **Beta remediation pass 2** – explicitly reviewed pitch counts
+      (enforced in the domain, not just the UI), one policy gate on every
+      mound/formation change with live P/C rules and a cap-crossing
+      checkpoint, postgame participation corrections, multi-team accounts
+      with account-bound local data, dirty state that survives sign-out,
+      password reset + durable email-confirmation state
+- [x] **Phase 5** – Hosted beta on Vercel
+- [ ] **Next** – Beta feedback; per-game rule snapshots; account deletion
+      UI; dependency/toolchain updates

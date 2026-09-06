@@ -20,6 +20,7 @@ import {
   GROUP_ORDER,
   shiftISO
 } from '../domain/analytics';
+import { formatOutsAsInnings } from '../domain/games';
 import { todayISO } from '../domain/dates';
 import { AppContext } from '../state/AppContext';
 import { EmptyState, StatCard } from '../components/ui';
@@ -76,21 +77,21 @@ function PositionDistributionCard({ stats }) {
   const [showTable, setShowTable] = React.useState(false);
   const { containerRef, show, hide, tooltipEl } = useTooltip();
 
-  const players = stats.filter(s => s.innings > 0);
-  const maxInnings = Math.max(1, ...players.map(s => s.innings));
+  const players = stats.filter(s => s.outs > 0);
+  const maxOuts = Math.max(1, ...players.map(s => s.outs));
 
   return (
     <div className="card">
       <div className="card-header">
         <div>
           <div className="card-title">Playing Time by Position</div>
-          <div className="card-subtitle">Innings per player</div>
+          <div className="card-subtitle">Recorded defensive outs per player (innings shown as thirds)</div>
         </div>
         <TableToggle showTable={showTable} onToggle={() => setShowTable(v => !v)} />
       </div>
       <div className="card-body">
         {players.length === 0 ? (
-          <p className="text-muted text-small">No innings recorded in this period.</p>
+          <p className="text-muted text-small">No participation recorded in this period. Playing time appears once you record outs during a game and complete it.</p>
         ) : showTable ? (
           <div style={{ overflowX: 'auto' }}>
             <table className="stats-table">
@@ -104,9 +105,9 @@ function PositionDistributionCard({ stats }) {
               <tbody>
                 {players.map(s => (
                   <tr key={s.playerId}>
-                    <td>{s.name}</td>
-                    {GROUP_ORDER.map(g => <td key={g}>{s.byGroup[g] || ''}</td>)}
-                    <td>{s.innings}</td>
+                    <td>{s.name}{s.onRoster ? '' : ' (removed)'}</td>
+                    {GROUP_ORDER.map(g => <td key={g}>{s.byGroup[g] ? formatOutsAsInnings(s.byGroup[g]) : ''}</td>)}
+                    <td>{formatOutsAsInnings(s.outs)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -126,22 +127,22 @@ function PositionDistributionCard({ stats }) {
                         key={g}
                         className="hbar-seg"
                         style={{
-                          width: `${(count / maxInnings) * 100}%`,
+                          width: `${(count / maxOuts) * 100}%`,
                           background: GROUP_COLORS[g]
                         }}
                         onPointerEnter={(e) => show(e, s.name, [
-                          `${GROUP_LABELS[g]}: ${count} inning${count === 1 ? '' : 's'}`,
-                          `${Math.round((count / s.innings) * 100)}% of ${s.innings} played`
+                          `${GROUP_LABELS[g]}: ${formatOutsAsInnings(count)} innings (${count} outs)`,
+                          `${Math.round((count / s.outs) * 100)}% of recorded outs`
                         ])}
                         onPointerDown={(e) => show(e, s.name, [
-                          `${GROUP_LABELS[g]}: ${count} inning${count === 1 ? '' : 's'}`,
-                          `${Math.round((count / s.innings) * 100)}% of ${s.innings} played`
+                          `${GROUP_LABELS[g]}: ${formatOutsAsInnings(count)} innings (${count} outs)`,
+                          `${Math.round((count / s.outs) * 100)}% of recorded outs`
                         ])}
                       />
                     );
                   })}
                 </div>
-                <span className="hbar-value">{s.innings}</span>
+                <span className="hbar-value">{formatOutsAsInnings(s.outs)}</span>
               </div>
             ))}
             {tooltipEl}
@@ -171,43 +172,43 @@ function BenchTimeCard({ stats }) {
   const { containerRef, show, hide, tooltipEl } = useTooltip();
 
   const players = stats
-    .filter(s => s.innings > 0)
-    .sort((a, b) => b.sits - a.sits);
-  const maxSits = Math.max(1, ...players.map(s => s.sits));
+    .filter(s => s.outs > 0)
+    .sort((a, b) => b.sitOuts - a.sitOuts);
+  const maxSits = Math.max(1, ...players.map(s => s.sitOuts));
 
   return (
     <div className="card">
       <div className="card-header">
         <div>
           <div className="card-title">Bench Time</div>
-          <div className="card-subtitle">Innings sat, most first</div>
+          <div className="card-subtitle">Bench innings (from recorded outs), most first</div>
         </div>
       </div>
       <div className="card-body">
         {players.length === 0 ? (
-          <p className="text-muted text-small">No innings recorded in this period.</p>
+          <p className="text-muted text-small">No participation recorded in this period.</p>
         ) : (
           <div ref={containerRef} className="chart-area" onPointerLeave={hide}>
             {players.map(s => (
               <div key={s.playerId} className="hbar-row">
                 <span className="hbar-label">{s.name}</span>
                 <div className="hbar-track">
-                  {s.sits > 0 && (
+                  {s.sitOuts > 0 && (
                     <div
                       className="hbar-seg single"
-                      style={{ width: `${(s.sits / maxSits) * 100}%` }}
+                      style={{ width: `${(s.sitOuts / maxSits) * 100}%` }}
                       onPointerEnter={(e) => show(e, s.name, [
-                        `Sat ${s.sits} of ${s.innings} innings`,
+                        `Sat ${formatOutsAsInnings(s.sitOuts)} of ${formatOutsAsInnings(s.outs)} innings`,
                         `${Math.round(s.sitShare * 100)}% bench time`
                       ])}
                       onPointerDown={(e) => show(e, s.name, [
-                        `Sat ${s.sits} of ${s.innings} innings`,
+                        `Sat ${formatOutsAsInnings(s.sitOuts)} of ${formatOutsAsInnings(s.outs)} innings`,
                         `${Math.round(s.sitShare * 100)}% bench time`
                       ])}
                     />
                   )}
                 </div>
-                <span className="hbar-value">{s.sits}</span>
+                <span className="hbar-value">{formatOutsAsInnings(s.sitOuts)}</span>
               </div>
             ))}
             {tooltipEl}
@@ -229,7 +230,7 @@ function PitcherWorkloadCard({ pitching, pitchRules }) {
   const scaleMax = Math.max(
     dailyMax || 0,
     1,
-    ...pitching.flatMap(p => p.perGame.map(g => g.pitches))
+    ...pitching.flatMap(p => p.perGame.map(g => g.pitches || 0))
   );
   const PLOT_H = 56;
 
@@ -261,10 +262,10 @@ function PitcherWorkloadCard({ pitching, pitchRules }) {
               <tbody>
                 {pitching.map(p => (
                   <tr key={p.playerId}>
-                    <td>{p.name}</td>
+                    <td>{p.name}{p.unknownCountGames > 0 ? ' ⚠' : ''}</td>
                     <td>{p.games}</td>
-                    <td>{p.totalPitches}</td>
-                    <td>{p.totalInnings}</td>
+                    <td>{p.totalPitches}{p.unknownCountGames > 0 ? '+?' : ''}</td>
+                    <td>{formatOutsAsInnings(p.totalPitchingOuts)}</td>
                     <td>{p.avgPitches}</td>
                     <td>{p.last7Pitches}</td>
                   </tr>
@@ -279,7 +280,10 @@ function PitcherWorkloadCard({ pitching, pitchRules }) {
                 <div className="workload-info">
                   <div className="workload-name">{p.name}</div>
                   <div className="text-muted text-small">
-                    {p.totalPitches} pitches · {p.totalInnings} inn · last 7d: {p.last7Pitches}
+                    {p.totalPitches}{p.unknownCountGames > 0 ? '+?' : ''} pitches · {formatOutsAsInnings(p.totalPitchingOuts)} inn · last 7d: {p.last7Pitches}
+                    {p.unknownCountGames > 0 && (
+                      <span style={{ color: 'var(--warning)' }}> · {p.unknownCountGames} count{p.unknownCountGames === 1 ? '' : 's'} needed</span>
+                    )}
                   </div>
                 </div>
                 <div className="workload-plot" style={{ height: PLOT_H }}>
@@ -292,15 +296,19 @@ function PitcherWorkloadCard({ pitching, pitchRules }) {
                   {p.perGame.map(g => (
                     <div
                       key={g.gameId}
-                      className="workload-col"
-                      style={{ height: Math.max(3, (g.pitches / scaleMax) * PLOT_H) }}
+                      className={`workload-col ${g.pitches === null ? 'unknown' : ''}`}
+                      style={{ height: Math.max(3, ((g.pitches || 0) / scaleMax) * PLOT_H) }}
                       onPointerEnter={(e) => show(e, p.name, [
                         `${g.date}${g.opponent ? ` vs ${g.opponent}` : ''}`,
-                        `${g.pitches} pitches, ${g.inningsPitched} inning${g.inningsPitched === 1 ? '' : 's'}`
+                        g.pitches === null
+                          ? `Count needed · ${formatOutsAsInnings(g.pitchingOuts)} innings pitched`
+                          : `${g.pitches} pitches, ${formatOutsAsInnings(g.pitchingOuts)} inning${g.pitchingOuts === 3 ? '' : 's'}`
                       ])}
                       onPointerDown={(e) => show(e, p.name, [
                         `${g.date}${g.opponent ? ` vs ${g.opponent}` : ''}`,
-                        `${g.pitches} pitches, ${g.inningsPitched} inning${g.inningsPitched === 1 ? '' : 's'}`
+                        g.pitches === null
+                          ? `Count needed · ${formatOutsAsInnings(g.pitchingOuts)} innings pitched`
+                          : `${g.pitches} pitches, ${formatOutsAsInnings(g.pitchingOuts)} inning${g.pitchingOuts === 3 ? '' : 's'}`
                       ])}
                     />
                   ))}
@@ -319,7 +327,7 @@ function PitcherWorkloadCard({ pitching, pitchRules }) {
 // The view
 // ----------------------------------------
 export function StatsView() {
-  const { games, roster, pitchHistory, settings } = React.useContext(AppContext);
+  const { games, roster, settings } = React.useContext(AppContext);
   const [rangeKey, setRangeKey] = React.useState('season');
 
   const today = todayISO();
@@ -334,24 +342,25 @@ export function StatsView() {
     [games, roster, range]
   );
   const pitching = React.useMemo(
-    () => computePitchingStats(pitchHistory, roster, games, today, range),
-    [pitchHistory, roster, games, today, range]
+    () => computePitchingStats(games, roster, today, range),
+    [roster, games, today, range]
   );
 
   const gamesInRange = games.filter(g =>
+    g.status === 'completed' &&
     (!range?.from || g.date >= range.from) && (!range?.to || g.date <= range.to)
   );
-  const totalInnings = seasonStats.reduce((sum, s) => sum + s.innings, 0);
+  const totalOuts = seasonStats.reduce((sum, s) => sum + s.outs, 0);
   const totalPitches = pitching.reduce((sum, p) => sum + p.totalPitches, 0);
 
-  if (games.length === 0) {
+  if (games.filter(g => g.status === 'completed').length === 0) {
     return (
       <div className="card">
         <div className="card-body">
           <EmptyState
             icon="📊"
             title="No Season Data Yet"
-            text="Save games from the lineup screen and season stats will build up here: who has played where, bench time, and pitcher workload."
+            text="Complete games from the lineup screen and season stats will build up here: who has played where, bench time, and pitcher workload."
           />
         </div>
       </div>
@@ -382,8 +391,8 @@ export function StatsView() {
       <div className="card">
         <div className="card-body" style={{ padding: 'var(--space-md)' }}>
           <div className="stats-grid">
-            <StatCard value={gamesInRange.length} label="Games" />
-            <StatCard value={totalInnings} label="Player Innings" />
+            <StatCard value={gamesInRange.length} label="Games Tracked" title="Completed games in this period" />
+            <StatCard value={formatOutsAsInnings(totalOuts)} label="Player-Innings Tracked" title="Recorded defensive outs across players (bench included), in innings" />
             <StatCard value={totalPitches} label="Pitches" />
             <StatCard
               value={pitching.length}

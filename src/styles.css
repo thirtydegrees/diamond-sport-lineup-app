@@ -1819,3 +1819,96 @@ body {
     display: none;
   }
 }
+
+/* ============================================
+   Live game panel (out tracking)
+   ============================================ */
+.live-panel {
+  border: 2px solid var(--accent);
+}
+
+.out-dots {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.out-dot {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  background: transparent;
+  transition: background 0.15s ease;
+}
+
+.out-dot.filled {
+  background: var(--accent);
+}
+
+.btn-lg {
+  padding: 14px 20px;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.live-formation {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: var(--space-sm);
+}
+
+.live-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  cursor: pointer;
+  font: inherit;
+  color: var(--text-primary);
+  min-height: 52px;
+}
+
+.live-chip:active {
+  transform: scale(0.97);
+}
+
+.live-chip.vacant {
+  border-style: dashed;
+  color: var(--text-tertiary);
+}
+
+.live-chip.bench {
+  flex-direction: row;
+  min-height: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+}
+
+.live-chip-name {
+  font-size: 13px;
+  font-weight: 600;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-bench {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-wrap: wrap;
+  margin-top: var(--space-sm);
+}
+
+/* Pitcher workload column with an unconfirmed count */
+.workload-col.unknown {
+  opacity: 0.45;
+  border: 1px dashed var(--warning);
+}

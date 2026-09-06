@@ -54,15 +54,24 @@ function Navigation({ currentView, onViewChange }) {
 // Main App Component
 // ============================================
 function AppContent() {
-  const { game, setGame } = React.useContext(AppContext);
+  const { game, setGame, showToast } = React.useContext(AppContext);
   const [view, setView] = React.useState('roster');
   const [showLineup, setShowLineup] = React.useState(false);
   const [showGameChoice, setShowGameChoice] = React.useState(false);
   const [confirmNewGame, setConfirmNewGame] = React.useState(false);
 
+  const isLiveGame = game?.status === 'live';
+
   const handleViewChange = (newView) => {
     if (newView === 'game') {
-      // Check if there's an active game with a lineup
+      // A live game goes straight back to the live screen
+      if (isLiveGame) {
+        setView('game');
+        setShowLineup(true);
+        setShowGameChoice(false);
+        return;
+      }
+      // A draft with a lineup offers continue/new
       const hasActiveGame = game && Object.keys(game.lineup || {}).length > 0;
       if (hasActiveGame) {
         setShowGameChoice(true);
@@ -90,11 +99,19 @@ function AppContent() {
   };
 
   const handleNewGame = () => {
-    // Clear the current game (only after explicit confirmation)
+    // Abandoning a draft/live game leaves NO trace in history, workload,
+    // or stats - only completed games count (confirmed after this dialog)
     setGame(null);
     setShowLineup(false);
     setShowGameChoice(false);
     setConfirmNewGame(false);
+  };
+
+  const handleGameCompleted = () => {
+    setShowLineup(false);
+    setShowGameChoice(false);
+    setView('history');
+    showToast('Find the completed game in History - pitch counts stay correctable there');
   };
 
   return (
@@ -133,7 +150,7 @@ function AppContent() {
         )}
 
         {view === 'game' && showLineup && (
-          <LineupView onBack={handleBackToSetup} />
+          <LineupView onBack={handleBackToSetup} onGameCompleted={handleGameCompleted} />
         )}
 
         {view === 'stats' && <StatsView />}
@@ -148,7 +165,7 @@ function AppContent() {
       {confirmNewGame && (
         <ConfirmDialog
           title="Start New Game"
-          message="Discard the current game and start fresh? If you haven't saved it, its lineup and pitch counts will be lost."
+          message="Discard the current game and start fresh? A discarded game leaves no history: no playing time, no pitching workload, no stats. If real innings were played, Complete Game instead."
           confirmLabel="Discard & Start New"
           danger
           onConfirm={handleNewGame}
