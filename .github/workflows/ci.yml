@@ -28,13 +28,7 @@ jobs:
         run: npx --yes playwright@$(node -p "require('playwright-core/package.json').version") install --with-deps chromium
 
       - name: E2E tests
-        run: |
-          npm run preview -- --port 4173 &
-          for i in $(seq 1 30); do
-            curl -sf http://localhost:4173 > /dev/null && break
-            sleep 1
-          done
-          npm run test:e2e
+        run: E2E_START_SERVER=1 npm run test:e2e
 
       - name: Upload E2E screenshots
         if: always()

@@ -10,6 +10,7 @@
 import React from 'react';
 import { AppContext } from '../state/AppContext';
 import { Sync } from '../services/sync';
+import { getPreset, getPresetsForSport } from '../domain/presets';
 import { ConfirmDialog } from './ui';
 
 const STATUS_DISPLAY = {
@@ -27,11 +28,12 @@ const MIN_PASSWORD_LENGTH = 8;
 
 export function AccountCard() {
   const {
-    user, syncStatus, provisioningError,
+    user, syncStatus, provisioningError, settings, setSettings,
     signIn, signUp, signOut, syncNow, switchTeam,
     resetPassword, resendConfirmation, showToast
   } = React.useContext(AppContext);
 
+  const [displayName, setDisplayName] = React.useState('');
   const [email, setEmail] = React.useState('');
   const [password, setPassword] = React.useState('');
   const [busy, setBusy] = React.useState(false);
@@ -41,6 +43,9 @@ export function AccountCard() {
   const [confirmSignOut, setConfirmSignOut] = React.useState(false);
 
   // Teams
+  const [rename, setRename] = React.useState('');
+  const [teamType, setTeamType] = React.useState(settings.sport);
+  const [presetId, setPresetId] = React.useState(settings.pitchRulePreset);
   const [teams, setTeams] = React.useState(null);
   const [newTeamName, setNewTeamName] = React.useState('');
   const [showNewTeam, setShowNewTeam] = React.useState(false);
@@ -151,7 +156,7 @@ export function AccountCard() {
     }
   };
 
-  const status = STATUS_DISPLAY[syncStatus] || STATUS_DISPLAY.signedOut;
+  const status = STATUS_DISPLAY[syncStatus] || {label: syncStatus === 'conflict' ? 'Conflict: edits preserved' : 'Changes pending', color: 'var(--warning)'};
   const syncError = syncStatus === 'error' ? (provisioningError || Sync.lastError) : null;
   const otherTeams = (teams || []).filter(t => t.id !== currentTeam?.id);
 
@@ -169,6 +174,8 @@ export function AccountCard() {
         </div>
       </div>
       <div className="card-body">
+        {Sync.recoveryCopies().length>0 && <details><summary>Recovery copies on this device</summary>{Sync.recoveryCopies().map(copy=><button className="btn btn-secondary" key={copy.key} onClick={()=>{const url=URL.createObjectURL(new Blob([JSON.stringify({app:'diamond-lineup',version:2,exportDate:new Date().toISOString(),data:copy.data},null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=`diamond-recovery-${copy.key.slice(13)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}}>Download {copy.teamName} recovery</button>)}</details>}
+
         {user ? (
           <>
             <p className="text-small mb-md">
@@ -198,6 +205,10 @@ export function AccountCard() {
               </button>
             </div>
 
+            {syncStatus === 'conflict' && <div role="alert"><p>{Sync.lastError}</p><p>Download your local backup below before loading the cloud copy. A recovery copy also stays on this device.</p><button className="btn btn-secondary" onClick={async()=>{try{await Sync.useCloudCopy();}catch(e){setError(e.message);}}}>Load Cloud Copy</button></div>}
+            <p className="text-small">Sync Now checks for cloud changes and sends pending edits. Offline edits stay on this device; simultaneous edits require review.</p><p className="text-small">Last checked: {Sync.lastPulledAt ? new Date(Sync.lastPulledAt).toLocaleTimeString() : 'Not yet'}</p>
+            <div className="form-group"><label className="form-label">Team name</label><input className="form-input" value={rename} placeholder={currentTeam?.name || 'Team name'} onChange={e=>setRename(e.target.value)}/><button className="btn btn-secondary" disabled={!rename.trim() || busy} onClick={async()=>{setBusy(true);try{await Sync.renameTeam(rename);setRename('');}catch(e){setError(e.message);}finally{setBusy(false);}}}>Rename Team</button></div>
+            {!settings.onboardingComplete && currentTeam && <div className="card"><div className="card-body"><strong>Set up this team</strong><p className="text-small">Rename your team above, then choose its sport and age/rules group. You can adjust rules in Settings.</p><select aria-label="Team sport" className="form-select" value={teamType} onChange={e=>{setTeamType(e.target.value);setPresetId(getPresetsForSport(e.target.value)[0].id);}}><option value="baseball">Baseball</option><option value="softball">Softball</option></select><select aria-label="Team rules" className="form-select" value={presetId} onChange={e=>setPresetId(e.target.value)}>{getPresetsForSport(teamType).map(p=><option key={p.id} value={p.id}>{p.label}</option>)}</select><button className="btn btn-primary" onClick={()=>setSettings({...settings,sport:teamType,teamType,pitchRulePreset:presetId,pitchRules:structuredClone(getPreset(presetId).rules),onboardingComplete:true})}>Save Team Setup</button></div></div>}
             {/* Teams */}
             <div style={{ marginTop: 'var(--space-md)', paddingTop: 'var(--space-md)', borderTop: '1px solid var(--border-light)' }}>
               <div className="text-muted text-small" style={{ marginBottom: '6px' }}>
@@ -284,6 +295,7 @@ export function AccountCard() {
               on your computer, run the game from your phone. Without an account,
               everything still works and stays on this device.
             </p>
+            <div className="form-group"><label className="form-label">Display name (optional, for a new account)</label><input className="form-input" value={displayName} onChange={e=>setDisplayName(e.target.value)} autoComplete="name" /></div>
             <div className="form-group">
               <label className="form-label">Email</label>
               <input
@@ -320,7 +332,7 @@ export function AccountCard() {
               <button
                 className="btn btn-secondary"
                 disabled={busy || !email || !password}
-                onClick={() => runAuth(() => signUp(email, password), 'Account created - syncing this device', true)}
+                onClick={() => runAuth(() => signUp(email, password, displayName), 'Account created - syncing this device', true)}
               >
                 Create Account
               </button>

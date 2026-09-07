@@ -61,6 +61,9 @@ export function normalizePitchRules(rules: PitchRules): PitchRules {
     return Number.isFinite(n) && n >= 0 ? n : fallback;
   };
   return {
+    maxGamesPerDay: rules.maxGamesPerDay,
+    maxConsecutiveDays: rules.maxConsecutiveDays,
+    maxMoundReturns: rules.maxMoundReturns,
     limitType: rules.limitType === 'innings' || rules.limitType === 'none' ? rules.limitType : 'pitches',
     breakpoints: (rules.breakpoints || [])
       .map(bp => ({ maxPitches: num(bp.maxPitches), restDays: num(bp.restDays) }))
@@ -123,6 +126,16 @@ export function assessPitcherRest(
     return { eligible: true, reason: 'Eligible', daysRest: null };
   }
 
+  if (rules.maxGamesPerDay && outings.filter(o => o.date === gameDate).length >= rules.maxGamesPerDay) {
+    return { eligible: false, reason: 'Daily pitching appearance limit', daysRest: 0 };
+  }
+  if (rules.maxConsecutiveDays) {
+    const priorDays = new Set(outings.map(o => daysBetween(o.date, gameDate)));
+    let consecutive = 0;
+    while (priorDays.has(consecutive + 1)) consecutive++;
+    if (consecutive >= rules.maxConsecutiveDays) return { eligible: false, reason: 'Consecutive pitching day limit', daysRest: 1 };
+  }
+
   // Aggregate same-day outings (doubleheaders) before applying rest tiers
   const byDate = new Map<string, { pitches: number; outs: number; unknown: boolean }>();
   for (const o of outings) {
@@ -147,7 +160,7 @@ export function assessPitcherRest(
       required = restDaysForPitches(day.pitches, rules);
     }
     const rested = daysBetween(date, gameDate);
-    const daysNeeded = required - rested;
+    const daysNeeded = required > 0 ? required + 1 - rested : 0;
     if (daysNeeded > 0 && (!worst || daysNeeded > worst.daysNeeded)) {
       worst = { date, daysNeeded, unknown: unknownUsed, pitches: day.pitches, outs: day.outs };
     }
@@ -221,9 +234,15 @@ export function assessPitcherAssignment(
       severity: 'warn',
       message: rest.needsCount
         ? `${player.name} has a prior outing with no confirmed pitch count - fix it in History (treated as needing ${rest.daysNeeded} more rest day${rest.daysNeeded === 1 ? '' : 's'})`
-        : `${player.name} needs ${rest.daysNeeded} more rest day${rest.daysNeeded === 1 ? '' : 's'} (last outing ${rest.daysRest}d ago)`,
-      short: rest.needsCount ? 'Count needed' : `${rest.daysNeeded}d rest`
+        : `${player.name}: ${rest.reason}`,
+      short: rest.needsCount ? 'Count needed' : rest.reason
     });
+  }
+
+  const stints = game.pitchingStints || [];
+  const returning = game.live && game.live.assignments[player.id] !== 'P';
+  if (returning && rules.maxMoundReturns != null && stints.filter(id => id === player.id).length > rules.maxMoundReturns) {
+    warnings.push({ severity: 'warn', short: 'Mound return limit', message: `${player.name} has reached the mound-return limit` });
   }
 
   // 2. Daily pitch total vs the configured absolute max

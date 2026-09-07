@@ -40,6 +40,9 @@ const NO_INNINGS_RULES = {
 function pitchSmartRules(absoluteMax: number): PitchRules {
   return {
     limitType: 'pitches',
+    maxGamesPerDay: 1,
+    maxConsecutiveDays: 2,
+    maxMoundReturns: absoluteMax >= 95 ? 1 : 0,
     breakpoints: PITCH_SMART_BREAKPOINTS.map(bp => ({ ...bp })),
     absoluteMax,
     absoluteMaxRest: 4,
@@ -53,7 +56,7 @@ export const PITCH_RULE_PRESETS: PitchRulePreset[] = [
     label: 'Pitch Smart 7-8 (50 max)',
     sport: 'baseball',
     description: 'USA Baseball Pitch Smart guidelines, ages 7-8. Used by Little League, Cal Ripken, and PONY divisions.',
-    rules: pitchSmartRules(50)
+    rules: { ...pitchSmartRules(50), breakpoints: PITCH_SMART_BREAKPOINTS.slice(0,3), absoluteMaxRest: 2 }
   },
   {
     id: 'pitch-smart-9-10',

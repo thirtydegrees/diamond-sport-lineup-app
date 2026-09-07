@@ -41,15 +41,15 @@ describe('decideKeySync', () => {
     expect(decide({ remoteRow: row('2026-07-05T10:00:00Z'), lastSeenRemote: '2026-07-01T10:00:00Z' })).toBe('apply');
   });
 
-  it('true conflict: newer side wins per key', () => {
+  it('true conflict: neither device clock determines the winner', () => {
     const conflict = (dirtyAt: string) => decide({
       remoteRow: row('2026-07-05T10:00:00Z'),
       lastSeenRemote: '2026-07-01T10:00:00Z',
       dirty: true,
       dirtyAt
     });
-    expect(conflict('2026-07-06T09:00:00Z')).toBe('push');  // local edit is newer
-    expect(conflict('2026-07-04T09:00:00Z')).toBe('apply'); // remote edit is newer
+    expect(conflict('2026-07-06T09:00:00Z')).toBe('conflict');  // local edit is newer
+    expect(conflict('2026-07-04T09:00:00Z')).toBe('conflict'); // remote edit is newer
   });
 
   it('H1 regression: each key decides independently, so an unrelated remote change cannot clobber a local one', () => {
@@ -124,9 +124,9 @@ describe('dirty state survives sign-out (unsynced edits are not lost)', () => {
     // SAME account pushes the offline edits instead of losing them
     expect(Sync.hasPendingChanges()).toBe(true);
     expect(getDataOwner()).toMatchObject({ userId: 'u1', teamId: 't1' });
-    const meta = JSON.parse(localStorage.getItem('ybl_syncMeta') || '{}');
-    expect(meta.keys.roster.dirty).toBe(true);
-    expect(meta.keys.games.dirty).toBe(true);
+    const meta = JSON.parse(localStorage.getItem('ybl_state_v3') || '{}').snapshotMeta;
+    expect(meta.dirty).toBe(true);
+    expect(meta.localRevision).toBe(2);
   });
 
   it('clearSyncMeta (clear-all / adoption) wipes both meta and owner', () => {

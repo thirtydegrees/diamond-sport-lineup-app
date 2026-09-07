@@ -43,6 +43,9 @@ export interface InningsRuleBreakpoint {
  * - 'none': no workload restrictions (common in rec softball)
  */
 export interface PitchRules {
+  maxGamesPerDay?: number;
+  maxConsecutiveDays?: number;
+  maxMoundReturns?: number;
   limitType: 'pitches' | 'innings' | 'none';
   breakpoints: PitchRuleBreakpoint[];
   absoluteMax: number;
@@ -61,6 +64,8 @@ export interface FairnessSettings {
 }
 
 export interface Settings {
+  onboardingComplete?: boolean;
+  teamType?: string;
   sport: Sport;
   fielderCount: FielderCount;
   innings: number;
@@ -106,6 +111,8 @@ export interface DefensiveOut {
  *   as zero - eligibility becomes conservative until corrected
  */
 export interface PitchCountEntry {
+  /** Unallocated correction: live = sum(byInning) + adjustment. */
+  adjustment?: number;
   live: number;
   byInning: Record<number, number>;
   confirmed: number | null;
@@ -122,6 +129,13 @@ export interface LiveGameState {
 }
 
 export interface Game {
+  workloadSource?: string;
+  rulesSnapshot?: PitchRules;
+  rulesVersion?: string;
+  sport?: Sport;
+  /** Pitchers placed on the mound, including appearances with no recorded outs. */
+  pitchingAppearances?: string[];
+  pitchingStints?: string[];
   schemaVersion: 2;
   id: string;
   date: string; // YYYY-MM-DD (local calendar date, no time component)

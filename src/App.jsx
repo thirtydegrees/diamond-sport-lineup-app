@@ -3,6 +3,8 @@
    ============================================ */
 
 import React from 'react';
+import { Sync, getDataOwner } from './services/sync';
+import { UpdateNotice } from './components/UpdateNotice';
 import { AppContext, AppProvider } from './state/AppContext';
 import { ConfirmDialog } from './components/ui';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -18,7 +20,7 @@ import { HistoryView } from './views/HistoryView';
 // Navigation Component
 // ============================================
 function Navigation({ currentView, onViewChange }) {
-  const { settings } = React.useContext(AppContext);
+  const { settings, syncStatus } = React.useContext(AppContext);
   const sportEmoji = settings.sport === 'softball' ? '🥎' : '⚾';
   const tabs = [
     { id: 'roster', label: 'Roster', icon: '👥' },
@@ -32,7 +34,7 @@ function Navigation({ currentView, onViewChange }) {
   return (
     <nav className="nav">
       <div className="nav-content">
-        <span className="nav-title">{sportEmoji} Diamond Lineup</span>
+        <span className="nav-title">{sportEmoji} Diamond Lineup <small>{Sync.currentTeam?.name || getDataOwner()?.teamName || 'Local team'}</small></span>
         <div className="nav-tabs">
           {tabs.map(tab => (
             <button
@@ -53,6 +55,11 @@ function Navigation({ currentView, onViewChange }) {
 // ============================================
 // Main App Component
 // ============================================
+function TeamWorkspace() {
+  const { remoteVersion } = React.useContext(AppContext);
+  return <AppContent key={remoteVersion}/>;
+}
+
 function AppContent() {
   const { game, setGame, showToast } = React.useContext(AppContext);
   const [view, setView] = React.useState('roster');
@@ -121,6 +128,7 @@ function AppContent() {
         onViewChange={handleViewChange}
       />
 
+      <UpdateNotice />
       <main className="main">
         {view === 'roster' && <RosterView />}
 
@@ -180,7 +188,7 @@ export function App() {
   return (
     <ErrorBoundary>
       <AppProvider>
-        <AppContent />
+        <TeamWorkspace />
       </AppProvider>
     </ErrorBoundary>
   );

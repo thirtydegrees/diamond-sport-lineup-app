@@ -24,6 +24,8 @@ export interface AvoidOverride {
 }
 
 export interface SolveParams {
+  maxPitchingStints?: number;
+  excludedPitcherIds?: string[];
   players: Player[];
   innings: number;
   startInning?: number;
@@ -92,17 +94,10 @@ export const Solver = {
     totalInnings: number
   ): boolean {
     if (position !== 'P' && position !== 'C') return true;
-    if (inning > 1) {
-      const prevPos = solution[`${player.id}-${inning - 1}`];
-      if ((position === 'P' && prevPos === 'C') || (position === 'C' && prevPos === 'P')) {
-        return false;
-      }
-    }
-    if (inning < totalInnings) {
-      const nextPos = solution[`${player.id}-${inning + 1}`];
-      if (nextPos && ((position === 'P' && nextPos === 'C') || (position === 'C' && nextPos === 'P'))) {
-        return false;
-      }
+    for (let i = 1; i <= totalInnings; i++) {
+      if (i === inning) continue;
+      const other = solution[`${player.id}-${i}`];
+      if ((position === 'P' && other === 'C') || (position === 'C' && other === 'P')) return false;
     }
     return true;
   },
@@ -144,6 +139,8 @@ export const Solver = {
     totalInnings: number,
     avoidOverrides: Set<string> = new Set(),
     rules: {
+      maxPitchingStints?: number;
+  excludedPitcherIds?: string[];
       enforcePitcherCatcherRule?: boolean;
       requireContiguousPitching?: boolean;
       maxPitcherInningsPerGame?: number | null;
@@ -162,6 +159,16 @@ export const Solver = {
       return false;
     }
     if (position === 'P') {
+      if (rules.excludedPitcherIds?.includes(player.id)) return false;
+      if (rules.maxPitchingStints != null) {
+        let stints = 0, previous = false;
+        for(let i=1;i<=totalInnings;i++) {
+          const pitching = i===inning || solution[`${player.id}-${i}`]==='P';
+          if(pitching && !previous)stints++;
+          previous=pitching;
+        }
+        if(stints>rules.maxPitchingStints)return false;
+      }
       const requireContiguous = rules.requireContiguousPitching !== false;
       if (requireContiguous && !this.checkPitchingContiguity(player, inning, solution, totalInnings)) {
         return false;
@@ -224,6 +231,8 @@ export const Solver = {
   solve(params: SolveParams): SolveResult {
     const {
       players,
+      excludedPitcherIds = [],
+      maxPitchingStints,
       innings,
       startInning = 1,
       existingPlan = {},
@@ -249,7 +258,7 @@ export const Solver = {
     const warnings: string[] = [];
     const avoidOverrideSet = new Set(avoidOverrides.map(o => `${o.playerId}-${o.position}`));
     const sitOverrideSet = new Set(sitOverrides);
-    const assignmentRules = { enforcePitcherCatcherRule, requireContiguousPitching, maxPitcherInningsPerGame };
+    const assignmentRules = { excludedPitcherIds, maxPitchingStints, enforcePitcherCatcherRule, requireContiguousPitching, maxPitcherInningsPerGame };
     const infieldSlotsPerInning = fieldingPositions.filter(pos => !isOutfield(pos)).length;
 
     // Copy locked cells and existing assignments for innings before startInning
@@ -269,6 +278,18 @@ export const Solver = {
       if (inn >= startInning && playerId) {
         solution[`${playerId}-${inn}`] = 'P';
       }
+    }
+
+    // Fixed cells must satisfy the same constraints as generated assignments.
+    for (const [key, position] of Object.entries(solution)) {
+      const sep = key.lastIndexOf('-'), id = key.slice(0, sep), inning = Number(key.slice(sep+1));
+      if (inning < startInning) continue;
+      const player = players.find(p=>p.id===id);
+      const without = {...solution}; delete without[key];
+      if (!player || !this.canAssignPosition(player,position,inning,without,innings,avoidOverrideSet,assignmentRules)) {
+        return {success:false,error:`Locked assignment violates constraints: ${player?.name || id}, inning ${inning}, ${position}`};
+      }
+      if (position !== 'SIT' && players.some(p=>p.id!==id && solution[`${p.id}-${inning}`]===position)) return {success:false,error:`Duplicate ${position} in inning ${inning}`};
     }
 
     // Solve each inning

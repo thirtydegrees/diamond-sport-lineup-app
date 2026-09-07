@@ -4,3 +4,5 @@ dist/
 *.local
 .vscode/
 .e2e-artifacts/
+
+supabase/.temp/

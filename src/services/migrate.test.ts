@@ -60,7 +60,7 @@ describe('migrateSavedGameV1', () => {
     const g = migrateSavedGameV1(v1Game, v1Records, roster);
     // 27 pitches -> 1 rest day under default rules
     expect(assessPitcherRest('a', '2026-05-10', [g], DEFAULT_SETTINGS.pitchRules).eligible).toBe(false);
-    expect(assessPitcherRest('a', '2026-05-11', [g], DEFAULT_SETTINGS.pitchRules).eligible).toBe(true);
+    expect(assessPitcherRest('a', '2026-05-12', [g], DEFAULT_SETTINGS.pitchRules).eligible).toBe(true);
   });
 
   it('snapshots player names from the roster', () => {

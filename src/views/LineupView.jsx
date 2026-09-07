@@ -61,7 +61,7 @@ import { LineupGrid, LineupStats } from '../components/LineupGrid';
 import { Alert, ConfirmDialog, Modal, OptionItem, OptionList } from '../components/ui';
 
 export function LineupView({ onBack, onGameCompleted }) {
-  const { roster, settings, game, setGame, games, setGames, showToast } = React.useContext(AppContext);
+  const { roster, settings, game, setGame, games, setGames, commitData, showToast } = React.useContext(AppContext);
 
   const [error, setError] = React.useState(null);
   const [warnings, setWarnings] = React.useState(null);
@@ -92,10 +92,17 @@ export function LineupView({ onBack, onGameCompleted }) {
   const [liveOverridePrompt, setLiveOverridePrompt] = React.useState(null); // { warnings, apply }
   const [planOverridePrompt, setPlanOverridePrompt] = React.useState(null); // { warnings, proceed }
 
+  const [confirmAction, setConfirmAction] = React.useState(null);
+  const latestGame = React.useRef(game); latestGame.current = game;
+  const guarded = (base, action) => () => {
+    if (latestGame.current !== base) { showToast('Game changed while reviewing. Please try again.', 'error'); return; }
+    action();
+  };
+  const pitchRules = game?.rulesSnapshot || settings.pitchRules;
   const isLive = game?.status === 'live';
   const innings = game?.innings || settings.innings;
   const fieldingPositions = getFieldingPositions(game?.fielderCount || settings.fielderCount);
-  const isSoftball = settings.sport === 'softball';
+  const isSoftball = (game?.sport || settings.sport) === 'softball';
 
   const getActivePlayers = React.useCallback((g) => {
     if (!g?.battingOrder) return [];
@@ -113,8 +120,8 @@ export function LineupView({ onBack, onGameCompleted }) {
 
   /** Central policy check for putting a player on the mound in THIS game. */
   const assessPitcher = React.useCallback(
-    (player) => assessPitcherAssignment(player, game, games, settings.pitchRules),
-    [game, games, settings.pitchRules]
+    (player) => { const warnings = assessPositionChange(player, 'P', game, games, pitchRules, { enforcePitcherCatcherRule: !isSoftball, live: false }); return { allowed: !warnings.some(w => w.severity === 'block'), warnings }; },
+    [game, games, pitchRules]
   );
 
   /**
@@ -132,6 +139,7 @@ export function LineupView({ onBack, onGameCompleted }) {
 
     const result = Solver.solve({
       players: getActivePlayers(baseGame),
+      excludedPitcherIds: getActivePlayers(baseGame).filter(p=>assessPitcherAssignment(p,baseGame,games,pitchRules).warnings.length>0).map(p=>p.id),
       innings: baseGame.innings || innings,
       startInning: fromInning,
       existingPlan: baseGame.lineup || {},
@@ -142,10 +150,9 @@ export function LineupView({ onBack, onGameCompleted }) {
       sitOverrides: effectiveSit,
       fieldingPositions: getFieldingPositions(baseGame.fielderCount || settings.fielderCount),
       enforcePitcherCatcherRule: !isSoftball,
-      requireContiguousPitching: !isSoftball,
-      maxPitcherInningsPerGame: settings.pitchRules.limitType === 'innings'
-        ? settings.pitchRules.maxInningsPerGame
-        : null,
+      requireContiguousPitching: !isSoftball && (pitchRules.maxMoundReturns ?? 0) === 0,
+      maxPitchingStints: pitchRules.maxMoundReturns == null ? undefined : pitchRules.maxMoundReturns + 1,
+      maxPitcherInningsPerGame: pitchRules.maxInningsPerGame,
       maxConsecutiveSits: settings.fairness.maxConsecutiveSits,
       everyoneInfield: settings.fairness.everyoneInfield
     });
@@ -207,16 +214,25 @@ export function LineupView({ onBack, onGameCompleted }) {
     doStartGame();
   };
 
+  const reviewTransition = (next, apply) => {
+    const warnings = Object.entries(next.live?.assignments || {}).flatMap(([id, pos]) => {
+      if (game.live?.assignments[id] === pos) return [];
+      const player = roster.find(p => p.id === id);
+      return player ? assessPositionChange(player, pos, game, games, pitchRules, { enforcePitcherCatcherRule: !isSoftball, live: true }) : [];
+    });
+    if (warnings.length) setLiveOverridePrompt({ warnings, apply: guarded(game, apply) });
+    else apply();
+  };
   const doStartGame = () => {
     setStartIssuesPrompt(null);
-    setGame(startLiveGame(game));
-    showToast('Game started - record each defensive out as it happens');
+    const next = startLiveGame(game);
+    reviewTransition(next, () => { setGame(next); showToast('Game started'); });
   };
 
   const doRecordOut = (bulk) => {
     setOutIssuesPrompt(null);
     const next = bulk ? endInningOuts(game) : recordOut(game);
-    setGame(next);
+    reviewTransition(next, () => { if(setGame(next))lastOutAction.current={before:game,after:next.outs}; });
     const done = next.live;
     if (done && done.outsRecorded === 0 && done.inning > game.live.inning) {
       if (done.inning > next.innings) {
@@ -229,6 +245,7 @@ export function LineupView({ onBack, onGameCompleted }) {
 
   // One acknowledgment per pitcher per game: after the coach knowingly
   // continues past a workload boundary, don't nag on every subsequent out
+  const lastOutAction = React.useRef(null);
   const capAcks = React.useRef(new Set());
 
   const proceedRecordOut = (bulk) => {
@@ -254,7 +271,7 @@ export function LineupView({ onBack, onGameCompleted }) {
     );
     if (livePitcher && !capAcks.current.has(livePitcher)) {
       const remaining = bulk ? OUTS_PER_INNING - game.live.outsRecorded : 1;
-      const capWarnings = capCrossingWarnings(game, games, settings.pitchRules, remaining);
+      const capWarnings = capCrossingWarnings(game, games, pitchRules, remaining);
       if (capWarnings.length > 0) {
         setCapPrompt({ warnings: capWarnings, bulk, pitcherId: livePitcher });
         return;
@@ -265,42 +282,31 @@ export function LineupView({ onBack, onGameCompleted }) {
 
   const handleUndoOut = () => {
     if ((game.outs || []).length === 0) return;
-    setGame(undoOut(game));
+    const action = lastOutAction.current;
+    if(action && game.outs === action.after) {setGame({...game,outs:action.before.outs,live:action.before.live});lastOutAction.current=null;}
+    else setGame(undoOut(game));
   };
 
   /** Warnings for putting `player` at `position` in the LIVE formation -
       the same central policy as every other assignment path (H6). */
   const liveWarningsFor = React.useCallback((position) => (player) =>
-    assessPositionChange(player, position, game, games, settings.pitchRules, {
+    assessPositionChange(player, position, game, games, pitchRules, {
       enforcePitcherCatcherRule: !isSoftball,
       live: true
-    }), [game, games, settings.pitchRules, isSoftball]);
+    }), [game, games, pitchRules, isSoftball]);
 
   /** Apply a live swap, checking the DISPLACED player's new spot too. */
   const attemptLiveSwap = (playerId, position) => {
-    const holderId = position !== 'SIT'
-      ? Object.keys(game.live.assignments).find(
-          id => id !== playerId && game.live.assignments[id] === position
-        )
-      : null;
-    if (holderId) {
-      const holder = roster.find(p => p.id === holderId);
-      const holderNewPos = game.live.assignments[playerId] ?? 'SIT';
-      const displacedWarnings = holder
-        ? assessPositionChange(holder, holderNewPos, game, games, settings.pitchRules, {
-            enforcePitcherCatcherRule: !isSoftball,
-            live: true
-          })
-        : [];
-      if (displacedWarnings.length > 0) {
-        setLiveOverridePrompt({
-          warnings: displacedWarnings,
-          apply: () => setGame(applyLiveSwap(game, playerId, position))
-        });
-        return;
-      }
-    }
-    setGame(applyLiveSwap(game, playerId, position));
+    const next = applyLiveSwap(game, playerId, position);
+    const changes = Object.entries(next.live.assignments).filter(([id, pos]) => game.live.assignments[id] !== pos);
+    const apply = guarded(game, () => setGame(next));
+    const warnings = changes.flatMap(([id, pos]) => {
+      const player = roster.find(p=>p.id===id);
+      return player ? assessPositionChange(player, pos, game, games, pitchRules, {enforcePitcherCatcherRule: !isSoftball, live:true}) : [];
+    });
+    const confirm = () => setConfirmAction({title:'Confirm Position Change', message:changes.map(([id,pos])=>`${playerName(id)}: ${game.live.assignments[id] || 'unassigned'} → ${pos}`).join('. '), apply});
+    if(warnings.length) setLiveOverridePrompt({warnings,apply:guarded(game,confirm)});
+    else confirm();
   };
 
   const handleLiveSpotSelect = (playerId) => {
@@ -315,7 +321,7 @@ export function LineupView({ onBack, onGameCompleted }) {
     const player = roster.find(p => p.id === playerId);
     setBenchMoveModal(null);
     if (!player) return;
-    const warnings = assessPositionChange(player, position, game, games, settings.pitchRules, {
+    const warnings = assessPositionChange(player, position, game, games, pitchRules, {
       enforcePitcherCatcherRule: !isSoftball,
       live: true
     });
@@ -368,8 +374,7 @@ export function LineupView({ onBack, onGameCompleted }) {
       showToast(e.message, 'error');
       return;
     }
-    setGames([...games.filter(g => g.id !== completed.id), completed]);
-    setGame(null);
+    if (!commitData({ games: [...games.filter(g => g.id !== completed.id), completed], currentGame: null })) return;
     setCompleteModal(false);
     showToast('Game completed and saved to history');
     onGameCompleted?.();
@@ -386,7 +391,7 @@ export function LineupView({ onBack, onGameCompleted }) {
     const newLocks = { ...game.lockedCells };
     const newLineup = { ...game.lineup };
 
-    const oldPitcherId = newAssignments[inning];
+    const oldPitcherId = newAssignments[inning] || game.battingOrder.find(id=>game.lineup?.[`${id}-${inning}`]==='P');
     if (oldPitcherId) {
       delete newLocks[`${oldPitcherId}-${inning}`];
       if (newLineup[`${oldPitcherId}-${inning}`] === 'P') {
@@ -458,9 +463,10 @@ export function LineupView({ onBack, onGameCompleted }) {
   const handlePositionSelect = (newPosition) => {
     const { player, inning } = positionModal;
     setPositionModal(null);
+    if (isLive && inning === game.live.inning) { attemptLiveSwap(player.id, newPosition); return; }
 
     const ctx = { enforcePitcherCatcherRule: !isSoftball, live: false };
-    const moverWarnings = assessPositionChange(player, newPosition, game, games, settings.pitchRules, ctx);
+    const moverWarnings = assessPositionChange(player, newPosition, game, games, pitchRules, ctx);
 
     // Who would be displaced, and where would they land?
     const holder = newPosition !== 'SIT'
@@ -468,11 +474,11 @@ export function LineupView({ onBack, onGameCompleted }) {
       : null;
     const oldPosition = game.lineup?.[`${player.id}-${inning}`] || null;
     const displacedWarnings = holder && oldPosition
-      ? assessPositionChange(holder, oldPosition, game, games, settings.pitchRules, ctx)
+      ? assessPositionChange(holder, oldPosition, game, games, pitchRules, ctx)
       : [];
 
     const allWarnings = [...moverWarnings, ...displacedWarnings];
-    const proceed = () => applyPositionSwap(player, inning, newPosition);
+    const proceed = guarded(game, () => applyPositionSwap(player, inning, newPosition));
 
     if (allWarnings.some(w => w.severity === 'block')) {
       setWarnings(allWarnings.map(w => w.message));
@@ -486,16 +492,10 @@ export function LineupView({ onBack, onGameCompleted }) {
   };
 
   const applyPositionSwap = (player, inning, newPosition) => {
-    const prevGame = game; // real undo: restore this exact snapshot
     const { game: swapped, changes } = applyPlanSwap(game, player, inning, newPosition, activePlayers);
     const planIssues = validateGamePlan(swapped);
     if (planIssues.length > 0) setWarnings(planIssues);
-    setGame(swapped);
-
-    const displacements = changes.filter(c => c.type === 'displaced');
-    if (displacements.length > 0) {
-      setDisplacementModal({ changes: changes.map(c => ({ ...c, player: c.playerName })), inning, prevGame });
-    }
+    setConfirmAction({ title: 'Confirm Position Change', message: changes.map(c => `${c.playerName}: ${c.from || 'unassigned'} → ${c.to || 'unassigned'}`).join('. '), apply: guarded(game, () => setGame(swapped)) });
   };
 
   const handleExitConfirm = (action) => {
@@ -687,7 +687,7 @@ export function LineupView({ onBack, onGameCompleted }) {
               ⬤ Record Defensive Out
             </button>
             <div style={{ display: 'flex', gap: 'var(--space-sm)', marginTop: 'var(--space-sm)' }}>
-              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => handleRecordOut(true)}>
+              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setConfirmAction({ title: 'End Inning', message: `Record all ${remainingOuts} remaining outs with the current defense?`, apply: guarded(game, () => handleRecordOut(true)) })}>
                 End Inning ({remainingOuts} out{remainingOuts === 1 ? '' : 's'})
               </button>
               <button
@@ -695,7 +695,7 @@ export function LineupView({ onBack, onGameCompleted }) {
                 disabled={totalOuts === 0}
                 onClick={handleUndoOut}
               >
-                ↩ Undo Out
+                ↩ Undo Outs
               </button>
             </div>
 
@@ -760,7 +760,7 @@ export function LineupView({ onBack, onGameCompleted }) {
           <div style={{ display: 'flex', gap: 'var(--space-sm)', flexWrap: 'wrap' }}>
             {Array.from({ length: game.innings }, (_, i) => {
               const inning = i + 1;
-              const pitcherId = game.pitcherAssignments?.[inning];
+              const pitcherId = game.battingOrder.find(id => game.lineup?.[`${id}-${inning}`] === 'P');
               return (
                 <button
                   key={inning}
@@ -819,6 +819,7 @@ export function LineupView({ onBack, onGameCompleted }) {
         ← Back to Setup
       </button>
 
+      {confirmAction && <ConfirmDialog title={confirmAction.title} message={confirmAction.message} confirmLabel="Confirm" onConfirm={() => { confirmAction.apply(); setConfirmAction(null); }} onCancel={() => setConfirmAction(null)} />}
       {/* Modals */}
       {showStartChoice && (
         <Modal title="Start Lineup" onClose={() => handleStartChoice('populated')}>
@@ -879,7 +880,7 @@ export function LineupView({ onBack, onGameCompleted }) {
           player={counterPlayer}
           inning={isLive ? live.inning : 1}
           entry={getPitchCountEntry(game, counterPlayer.id)}
-          dailyMax={settings.pitchRules.limitType === 'pitches' ? settings.pitchRules.absoluteMax : null}
+          dailyMax={pitchRules.limitType === 'pitches' ? pitchRules.absoluteMax : null}
           dailyTotal={dailyPitchTotal(counterPlayer.id, game, games).total}
           onCount={handleCount}
           onSetTotal={handleSetTotal}
@@ -1046,7 +1047,10 @@ export function LineupView({ onBack, onGameCompleted }) {
 
       {completeModal && (
         <CompleteGameModal
+          key={confirmationRows.map(r=>r.playerId).join(',')}
           rows={confirmationRows}
+          extraPlayers={activePlayers.filter(p=>!confirmationRows.some(r=>r.playerId===p.id))}
+          onAddPitcher={id=>setGame({...game,pitchingAppearances:[...new Set([...(game.pitchingAppearances || []),id])]})}
           hasOuts={totalOuts > 0}
           onComplete={handleComplete}
           onClose={() => setCompleteModal(false)}

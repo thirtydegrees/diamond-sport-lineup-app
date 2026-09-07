@@ -21,9 +21,8 @@
      no outs are inferred from `currentInning` (it is manually
      movable and not a completion marker). The coach starts out
      tracking when the next real game starts.
-   - Orphan pitch records (no matching saved game) are dropped:
-     they came from discarded drafts - the exact phantom-workload
-     bug this migration removes (H8).
+   - Orphan pitch records are retained separately by the storage/backup
+     boundary for coach review. No actual participation is inferred.
    ============================================ */
 
 import type { Assignment, DefensiveOut, Game, PitchCountEntry, PitchRecord, Player } from '../domain/types';

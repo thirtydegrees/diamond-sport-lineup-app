@@ -17,3 +17,8 @@ const SUPABASE_PUBLISHABLE_KEY =
   'sb_publishable_TRg-EoepPMKmSwttlrjpUQ_AetzpMsR';
 
 export const supabase: SupabaseClient = createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+
+/** Explicit callback, configurable for the canonical production origin. */
+export function authRedirectURL(): string {
+  return new URL(import.meta.env.VITE_APP_URL || '/', window.location.origin).href;
+}

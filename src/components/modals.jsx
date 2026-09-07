@@ -438,8 +438,8 @@ export function PitchCounterModal({ player, inning, entry, dailyMax, dailyTotal,
   const overMax = dailyMax != null && dailyMax > 0 && dailyTotal >= dailyMax;
 
   const commitEdit = () => {
-    const n = parseInt(editValue, 10);
-    if (Number.isFinite(n) && n >= 0) onSetTotal(n);
+    const n = Number(editValue);
+    if (editValue.trim() && Number.isInteger(n) && n >= 0) onSetTotal(n);
     setEditing(false);
   };
 
@@ -469,7 +469,7 @@ export function PitchCounterModal({ player, inning, entry, dailyMax, dailyTotal,
           <>
             <div className="pitch-counter-display">{totalPitches}</div>
             <div className="pitch-counter-inning">
-              {currentInningPitches} this inning
+              {currentInningPitches} this inning{entry.adjustment ? ` · ${entry.adjustment > 0 ? '+' : ''}${entry.adjustment} unallocated correction` : ''}
             </div>
           </>
         )}
@@ -485,7 +485,7 @@ export function PitchCounterModal({ player, inning, entry, dailyMax, dailyTotal,
           <button
             className="pitch-btn-minus"
             onClick={() => currentInningPitches > 0 && onCount(inning, currentInningPitches - 1)}
-            disabled={currentInningPitches === 0}
+            disabled={currentInningPitches === 0 || totalPitches === 0}
             aria-label="Subtract one pitch"
           >
             −
@@ -530,7 +530,7 @@ export function PitchCounterModal({ player, inning, entry, dailyMax, dailyTotal,
 // because an accidental confirmed zero looks authoritative and
 // unlocks eligibility a real count might not.
 // ============================================
-export function CompleteGameModal({ rows, hasOuts, onComplete, onClose }) {
+export function CompleteGameModal({ rows, hasOuts, onComplete, onClose, extraPlayers = [], onAddPitcher }) {
   // rows: [{ playerId, name, pitchingOuts, workingCount }]
   const [values, setValues] = React.useState(() => {
     const v = {};
@@ -589,6 +589,7 @@ export function CompleteGameModal({ rows, hasOuts, onComplete, onClose }) {
         </>
       }
     >
+      {extraPlayers.length > 0 && <label className="text-small">Missing a pitcher? Add any appearance, even with zero outs.<select className="form-select" value="" onChange={e=>{if(e.target.value)onAddPitcher?.(e.target.value);}}><option value="">Choose player</option>{extraPlayers.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>}
       {!hasOuts && (
         <Alert type="warning">
           No defensive outs were recorded, so this game will save with no

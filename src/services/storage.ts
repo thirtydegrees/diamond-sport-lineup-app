@@ -2,7 +2,7 @@
    Diamond Lineup - Storage Service
 
    Abstraction layer over localStorage. All persistence goes
-   through this service; cloud sync mirrors these keys.
+   through this service; cloud sync commits these values as one team snapshot.
 
    v2: games carry their own out ledgers and pitch-count state.
    Legacy v1 blobs (from old devices, cloud rows, or backups)
@@ -11,6 +11,7 @@
    pitching workload is derived from completed games.
    ============================================ */
 
+import { getPreset } from '../domain/presets';
 import { DEFAULT_SETTINGS } from '../domain/constants';
 import { compareDatesDesc } from '../domain/dates';
 import { normalizePitchRules } from '../domain/pitching';
@@ -20,6 +21,7 @@ import { isV2Game, migrateCurrentGameV1, migrateSavedGameV1 } from './migrate';
 const STORAGE_PREFIX = 'ybl_';
 
 export interface DataSet {
+  unreviewedPitchRecords?: PitchRecord[];
   roster: Player[];
   settings: Settings;
   currentGame: Game | null;
@@ -41,35 +43,38 @@ export const Storage = {
   // Core storage operations
   // ----------------------------------------
 
-  _get<T>(key: string, defaultValue: T): T {
-    try {
-      const data = localStorage.getItem(STORAGE_PREFIX + key);
-      if (data === null) return defaultValue;
-      return JSON.parse(data) as T;
-    } catch (e) {
-      console.error(`Storage read error for ${key}:`, e);
-      return defaultValue;
+  // A single localStorage replacement is atomic, including sync metadata.
+  raw(): Record<string, unknown> {
+    const current = localStorage.getItem('ybl_state_v3');
+    if (current !== null) return JSON.parse(current);
+    const legacy: Record<string, unknown> = {};
+    for (const key of [...Object.values(StorageKeys), 'syncMeta', 'dataOwner']) {
+      const value = localStorage.getItem(STORAGE_PREFIX + key);
+      if (value !== null) legacy[key] = JSON.parse(value);
     }
+    return legacy;
+  },
+
+  replaceRaw(data: Record<string, unknown>): boolean {
+    try {
+      localStorage.setItem('ybl_state_v3', JSON.stringify(data));
+      return true;
+    } catch (e) { console.error('Storage write failed', e); return false; }
+  },
+
+  _get<T>(key: string, defaultValue: T): T {
+    const value = this.raw()[key];
+    return value == null ? defaultValue : value as T;
   },
 
   _set(key: string, value: unknown): boolean {
-    try {
-      localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify(value));
-      return true;
-    } catch (e) {
-      console.error(`Storage write error for ${key}:`, e);
-      return false;
-    }
+    return this.replaceRaw({ ...this.raw(), [key]: value });
   },
 
   _remove(key: string): boolean {
-    try {
-      localStorage.removeItem(STORAGE_PREFIX + key);
-      return true;
-    } catch (e) {
-      console.error(`Storage remove error for ${key}:`, e);
-      return false;
-    }
+    const data = this.raw();
+    delete data[key];
+    return this.replaceRaw(data);
   },
 
   // ----------------------------------------
@@ -102,7 +107,8 @@ export const Storage = {
       },
       pitchRules: normalizePitchRules({
         ...DEFAULT_SETTINGS.pitchRules,
-        ...(saved.pitchRules || {})
+        ...(saved.pitchRules || {}),
+        ...(getPreset(saved.pitchRulePreset || DEFAULT_SETTINGS.pitchRulePreset)?.rules || {})
       })
     };
   },
@@ -210,15 +216,15 @@ export const Storage = {
   // ----------------------------------------
 
   clearAllData(): boolean {
-    Object.values(StorageKeys).forEach(key => {
-      this._remove(key);
-    });
-    return true;
+    const data = this.raw();
+    [...Object.values(StorageKeys), 'unreviewedPitchRecords'].forEach(k => { delete data[k]; });
+    return this.replaceRaw(data);
   },
 
   /** Current dataset (backup export and sync snapshots). */
   exportDataSet(): DataSet {
     return {
+      unreviewedPitchRecords: this._get<PitchRecord[]>('unreviewedPitchRecords', this.getLegacyPitchHistory().filter(r=>!this.getGames().some(g=>g.id===r.gameId))),
       roster: this.getRoster(),
       settings: this.getSettings(),
       currentGame: this.getCurrentGame(),
@@ -230,53 +236,9 @@ export const Storage = {
   /**
    * Replace the full dataset. Explicit nulls CLEAR their key (a cleared
    * current game or batting order must not resurrect). Every write result
-   * is checked; on any failure the previous values are restored so a
-   * half-applied import can't corrupt the device (H11).
+   * is checked; one atomic replacement prevents half-applied imports.
    */
   importDataSet(data: DataSet): boolean {
-    const backupRaw: Record<string, string | null> = {};
-    const keys = [
-      StorageKeys.ROSTER,
-      StorageKeys.SETTINGS,
-      StorageKeys.CURRENT_GAME,
-      StorageKeys.GAMES,
-      StorageKeys.DEFAULT_BATTING_ORDER
-    ];
-    try {
-      for (const key of keys) {
-        backupRaw[key] = localStorage.getItem(STORAGE_PREFIX + key);
-      }
-    } catch {
-      return false;
-    }
-
-    const writes: [string, unknown][] = [
-      [StorageKeys.ROSTER, data.roster],
-      [StorageKeys.SETTINGS, data.settings],
-      [StorageKeys.CURRENT_GAME, data.currentGame],
-      [StorageKeys.GAMES, data.games],
-      [StorageKeys.DEFAULT_BATTING_ORDER, data.defaultBattingOrder]
-    ];
-
-    let ok = true;
-    for (const [key, value] of writes) {
-      if (value === null) ok = this._remove(key) && ok;
-      else ok = this._set(key, value) && ok;
-      if (!ok) break;
-    }
-
-    if (!ok) {
-      // Roll back to the pre-import state
-      for (const [key, raw] of Object.entries(backupRaw)) {
-        try {
-          if (raw === null) localStorage.removeItem(STORAGE_PREFIX + key);
-          else localStorage.setItem(STORAGE_PREFIX + key, raw);
-        } catch {
-          // Rollback is best-effort under storage failure
-        }
-      }
-      return false;
-    }
-    return true;
+    return this.replaceRaw({ ...this.raw(), ...data });
   }
 };

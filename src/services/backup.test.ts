@@ -87,7 +87,7 @@ describe('restoreBackup atomicity (H11)', () => {
     expect(Storage.getGames()).toEqual([]);
   });
 
-  it('a mid-import write failure rolls the device back to its prior state', () => {
+  it('an atomic snapshot write failure leaves the prior dataset intact', () => {
     const backup = JSON.parse(JSON.stringify(buildBackup()));
     backup.data.roster = [makePlayer('z', 'Zoe')];
     const validated = validateBackup(backup);
@@ -96,7 +96,7 @@ describe('restoreBackup atomicity (H11)', () => {
     const shim = (globalThis as { localStorage: { setItem: (k: string, v: string) => void } }).localStorage;
     const originalSet = shim.setItem;
     shim.setItem = (k: string, v: string) => {
-      if (k === 'ybl_games') throw new Error('quota exceeded');
+      if (k === 'ybl_state_v3') throw new Error('quota exceeded');
       originalSet(k, v);
     };
     const ok = restoreBackup(validated);

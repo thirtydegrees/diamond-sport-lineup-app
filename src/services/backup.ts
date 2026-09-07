@@ -11,6 +11,7 @@
    the same migration path as v1 device data.
    ============================================ */
 
+import { getPreset } from '../domain/presets';
 import { DEFAULT_SETTINGS } from '../domain/constants';
 import { normalizePitchRules } from '../domain/pitching';
 import { todayISO } from '../domain/dates';
@@ -75,7 +76,8 @@ function validateSettings(raw: unknown): Settings {
     fairness: { ...DEFAULT_SETTINGS.fairness, ...(isRecord(saved.fairness) ? saved.fairness : {}) },
     pitchRules: normalizePitchRules({
       ...DEFAULT_SETTINGS.pitchRules,
-      ...(isRecord(saved.pitchRules) ? saved.pitchRules : {})
+      ...(isRecord(saved.pitchRules) ? saved.pitchRules : {}),
+      ...(getPreset(saved.pitchRulePreset || DEFAULT_SETTINGS.pitchRulePreset)?.rules || {})
     })
   };
 }
@@ -103,6 +105,15 @@ function checkV2Game(game: Game, index: number): Game {
     throw new BackupError(`${label} has an unknown status`);
   }
 
+  const whole = (v: unknown, min = 0) => typeof v === 'number' && Number.isInteger(v) && v >= min;
+  const assignments = (v: unknown) => isRecord(v) && Object.values(v).every(pos=>VALID_ASSIGNMENTS.has(String(pos)));
+  if (!whole(game.innings, 1) || ![9,10].includes(game.fielderCount) || !Array.isArray(game.battingOrder) || !game.battingOrder.every(id=>typeof id==='string') || new Set(game.battingOrder).size !== game.battingOrder.length) throw new BackupError(`${label} has invalid game structure`);
+  if (!assignments(game.lineup) || !assignments(game.lockedCells)) throw new BackupError(`${label} has invalid plan assignments`);
+  if (!isRecord(game.score) || !isRecord(game.score.us) || !isRecord(game.score.them) || ![...Object.values(game.score.us),...Object.values(game.score.them)].every(n=>whole(n))) throw new BackupError(`${label} has invalid scores`);
+  if (game.status==='live' && !game.live) throw new BackupError(`${label} has missing live state`);
+  if (game.pitchingAppearances && (!Array.isArray(game.pitchingAppearances) || !game.pitchingAppearances.every(id=>typeof id==='string'))) throw new BackupError(`${label} has invalid appearances`);
+  if (game.pitchingStints && (!Array.isArray(game.pitchingStints) || !game.pitchingStints.every(id=>typeof id==='string'))) throw new BackupError(`${label} has invalid pitching stints`);
+
   for (const out of game.outs) {
     if (!isRecord(out)) throw new BackupError(`${label} has a malformed out entry`);
     if (typeof out.inning !== 'number' || out.inning < 1) {
@@ -125,22 +136,22 @@ function checkV2Game(game: Game, index: number): Game {
     if (typeof pid !== 'string' || !isRecord(entry)) {
       throw new BackupError(`${label} has a malformed pitch-count entry`);
     }
-    if (typeof entry.live !== 'number' || entry.live < 0) {
+    if (!whole(entry.live)) {
       throw new BackupError(`${label} has an invalid working pitch count`);
     }
-    if (entry.confirmed !== null && (typeof entry.confirmed !== 'number' || entry.confirmed < 0)) {
+    if (entry.confirmed !== null && (!whole(entry.confirmed))) {
       throw new BackupError(`${label} has an invalid confirmed pitch count`);
     }
     if (!['live', 'confirmed', 'unknown'].includes(entry.status as string)) {
       throw new BackupError(`${label} has an invalid pitch-count status`);
     }
-    if (entry.byInning !== undefined && !isRecord(entry.byInning)) {
+    if (!isRecord(entry.byInning) || !Object.values(entry.byInning).every(n=>whole(n))) {
       throw new BackupError(`${label} has malformed per-inning pitch counts`);
     }
   }
 
   if (game.live !== null && game.live !== undefined) {
-    if (!isRecord(game.live) || !isRecord(game.live.assignments) || typeof game.live.inning !== 'number') {
+    if (!isRecord(game.live) || !isRecord(game.live.assignments) || !whole(game.live.inning,1) || !whole(game.live.outsRecorded) || game.live.outsRecorded > 2 || !assignments(game.live.assignments)) {
       throw new BackupError(`${label} has malformed live state`);
     }
   }
@@ -166,6 +177,7 @@ export function validateBackup(parsed: unknown): ValidatedBackup {
   }
 
   const roster = (body.roster as unknown[]).map(validatePlayer);
+  if(new Set(roster.map(p=>p.id)).size !== roster.length) throw new BackupError('Duplicate player IDs');
   const settings = validateSettings(body.settings);
 
   const rawGames = body.games === undefined || body.games === null ? [] : body.games;
@@ -180,6 +192,7 @@ export function validateBackup(parsed: unknown): ValidatedBackup {
     isV2Game(g) ? checkV2Game(g, i) : migrateSavedGameV1(g, pitchHistory, roster)
   );
 
+  if(new Set(games.map(g=>g.id)).size !== games.length) throw new BackupError('Duplicate game IDs');
   const rawCurrent = body.currentGame ?? null;
   let currentGame: Game | null = null;
   if (rawCurrent !== null) {
@@ -195,7 +208,7 @@ export function validateBackup(parsed: unknown): ValidatedBackup {
 
   const fromVersion = isV2 ? 2 : 1;
   return {
-    data: { roster, settings, currentGame, games, defaultBattingOrder },
+    data: { roster, settings, currentGame, games, defaultBattingOrder, unreviewedPitchRecords: Array.isArray(body.unreviewedPitchRecords) ? body.unreviewedPitchRecords as PitchRecord[] : pitchHistory.filter(r=>!games.some(g=>g.id===r.gameId)) },
     summary:
       `${roster.length} players, ${games.length} saved games` +
       (fromVersion === 1 ? ' (older backup format, converted)' : ''),

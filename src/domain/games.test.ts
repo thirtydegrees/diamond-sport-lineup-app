@@ -177,7 +177,7 @@ describe('completion and pitch confirmation', () => {
   it('completeGame stores confirmed totals and only recorded outs become history', () => {
     const g = liveGameWithPitching();
     // Coach reconciles against GameChanger: real total was 17, not 14
-    const done = completeGame(g, [{ playerId: 'a', pitches: 17 }], roster);
+    const done = completeGame(g, [{ playerId: 'a', pitches: 17 }, {playerId:'j',pitches:0}], roster);
     expect(done.status).toBe('completed');
     expect(done.live).toBeNull();
     expect(done.pitchCounts.a).toMatchObject({ confirmed: 17, status: 'confirmed' });
@@ -186,19 +186,19 @@ describe('completion and pitch confirmation', () => {
   });
 
   it('marking unknown stores null, not zero', () => {
-    const done = completeGame(liveGameWithPitching(), [{ playerId: 'a', pitches: null }], roster);
+    const done = completeGame(liveGameWithPitching(), [{ playerId: 'a', pitches: null }, {playerId:'j',pitches:0}], roster);
     expect(done.pitchCounts.a.status).toBe('unknown');
     expect(done.pitchCounts.a.confirmed).toBeNull();
   });
 
   it('snapshots player names so history survives roster removal (M5)', () => {
-    const done = completeGame(liveGameWithPitching(), [{ playerId: 'a', pitches: 14 }], roster);
+    const done = completeGame(liveGameWithPitching(), [{ playerId: 'a', pitches: 14 }, {playerId:'j',pitches:0}], roster);
     expect(done.playerNames.a).toBe('A');
     expect(done.playerNames.j).toBe('J');
   });
 
   it('correctConfirmedPitches updates a completed game in place', () => {
-    const done = completeGame(liveGameWithPitching(), [{ playerId: 'a', pitches: 37 }], roster);
+    const done = completeGame(liveGameWithPitching(), [{ playerId: 'a', pitches: 37 }, {playerId:'j',pitches:0}], roster);
     const fixed = correctConfirmedPitches(done, 'a', 40);
     expect(fixed.pitchCounts.a.confirmed).toBe(40);
     const unknowned = correctConfirmedPitches(done, 'a', null);
@@ -284,7 +284,7 @@ describe('completion contract enforcement (domain-level)', () => {
     expect(
       completeGame(g2, [
         { playerId: 'a', pitches: 10 },
-        { playerId: 'x-counter-only', pitches: 4 }
+        { playerId: 'x-counter-only', pitches: 4 }, {playerId:'j',pitches:0}
       ], roster).status
     ).toBe('completed');
   });

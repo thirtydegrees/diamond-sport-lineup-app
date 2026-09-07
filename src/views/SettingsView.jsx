@@ -12,7 +12,7 @@ import { AccountCard } from '../components/AccountCard';
 import { ConfirmDialog, Toggle } from '../components/ui';
 
 export function SettingsView() {
-  const { settings, setSettings, roster, defaultBattingOrder, setDefaultBattingOrder, user, showToast } = React.useContext(AppContext);
+  const { reloadFromStorage, settings, setSettings, roster, defaultBattingOrder, setDefaultBattingOrder, user, commitData, showToast } = React.useContext(AppContext);
   const [confirmClearAll, setConfirmClearAll] = React.useState(false);
   const [clearing, setClearing] = React.useState(false);
   const [importPending, setImportPending] = React.useState(null);
@@ -126,11 +126,10 @@ export function SettingsView() {
   };
 
   const handleImportConfirm = () => {
-    const ok = restoreBackup(importPending);
+    const ok = commitData(importPending.data);
     setImportPending(null);
     if (ok) {
-      // The restored data should win the next sync
-      Sync.markAllDirty();
+      // Import is a local edit; a conflicting cloud revision still requires review.
       // Reload so all state re-initializes from the imported data
       window.location.reload();
     } else {
@@ -138,22 +137,22 @@ export function SettingsView() {
     }
   };
 
-  // Clear-all must not resurrect from the cloud on next launch: when signed
-  // in, the account copy is tombstoned first (other devices clear too). If
-  // that fails, nothing is deleted anywhere (H2).
+  // Signed-in clears are revision-checked team transactions. Signed-out
+  // clears remove only the loaded device snapshot; cloud copies are retained.
   const handleClearAll = async () => {
     setClearing(true);
     try {
       if (user) {
         await Sync.clearCloud();
+      } else {
+        if (!Storage.replaceRaw({})) throw new Error('Could not clear device data');
       }
-      Storage.clearAllData();
-      clearSyncMeta();
-      window.location.reload();
+      reloadFromStorage();
+      setConfirmClearAll(false); setClearing(false);
     } catch (e) {
       setClearing(false);
       setConfirmClearAll(false);
-      showToast(`Couldn't clear the account copy (${e.message || 'network error'}) - nothing was deleted`, 'error');
+      showToast(`Clear could not be confirmed: ${e.message || 'network error'}. Check sync status and recovery copies before retrying.`, 'error');
     }
   };
 
@@ -165,6 +164,7 @@ export function SettingsView() {
     <div>
       {/* Account & Sync */}
       <AccountCard />
+      {Storage.exportDataSet().unreviewedPitchRecords?.length > 0 && <p role="alert">Legacy pitching records without a saved game were preserved in your backup. Review those records and enter any real outings in Pitchers → Record outside pitching workload. They are not included in eligibility until reviewed.</p>}
 
       {/* Sport & Field */}
       <div className="card">
@@ -236,6 +236,7 @@ export function SettingsView() {
               <option value={5}>5 innings</option>
               <option value={6}>6 innings</option>
               <option value={7}>7 innings</option>
+              <option value={9}>9 innings</option>
             </select>
             <p className="form-hint">Can be adjusted per game. Use "Add Inning" during games for extras.</p>
           </div>
@@ -526,7 +527,7 @@ export function SettingsView() {
         </div>
         <div className="card-body">
           <button className="btn btn-danger" onClick={() => setConfirmClearAll(true)}>
-            Clear All Data
+            Clear Team Data
           </button>
           <p className="form-hint mt-sm">
             This will delete your roster, all games, pitch history, and settings.
@@ -536,12 +537,12 @@ export function SettingsView() {
 
       {confirmClearAll && (
         <ConfirmDialog
-          title="Clear All Data"
+          title="Clear Team Data"
           message={
             (user
-              ? 'Delete ALL data from this device AND your account (all synced devices)? '
+              ? `Clear roster and games for ${Sync.currentTeam?.name || 'the active team'} on all synced devices? `
               : 'Delete ALL data from this device? ') +
-            'This includes your roster, saved games, and settings. This cannot be undone - consider downloading a backup first.'
+            'Download a backup first. Other teams are unaffected.'
           }
           confirmLabel={clearing ? 'Deleting…' : 'Delete Everything'}
           danger

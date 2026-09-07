@@ -51,13 +51,13 @@ describe('assessPitcherRest', () => {
   it('applies the breakpoint table to confirmed counts', () => {
     const games = [completedOuting('g1', '2026-07-05', 'p1', 30)];
     expect(assessPitcherRest('p1', '2026-07-05', games, rules).eligible).toBe(false);
-    expect(assessPitcherRest('p1', '2026-07-06', games, rules).eligible).toBe(true);
+    expect(assessPitcherRest('p1', '2026-07-07', games, rules).eligible).toBe(true);
   });
 
   it('requires max rest above the highest breakpoint', () => {
     const games = [completedOuting('g1', '2026-07-01', 'p1', 80)];
     expect(assessPitcherRest('p1', '2026-07-04', games, rules).eligible).toBe(false);
-    expect(assessPitcherRest('p1', '2026-07-05', games, rules).eligible).toBe(true);
+    expect(assessPitcherRest('p1', '2026-07-06', games, rules).eligible).toBe(true);
   });
 
   it('EXCLUDES the current game so a game cannot block its own pitcher (H7)', () => {
@@ -80,7 +80,7 @@ describe('assessPitcherRest', () => {
     ];
     expect(assessPitcherRest('p1', '2026-07-05', games, rules).eligible).toBe(false);
     // After the required rest day they are eligible again
-    expect(assessPitcherRest('p1', '2026-07-06', games, rules).eligible).toBe(true);
+    expect(assessPitcherRest('p1', '2026-07-07', games, rules).eligible).toBe(true);
   });
 
   it('an earlier heavy outing still binds even after a later light one', () => {
@@ -91,7 +91,8 @@ describe('assessPitcherRest', () => {
       completedOuting('g2', '2026-07-05', 'p1', 5)
     ];
     const day6 = assessPitcherRest('p1', '2026-07-06', games, rules);
-    expect(day6.eligible).toBe(true);
+    expect(day6.eligible).toBe(false);
+    expect(assessPitcherRest('p1', '2026-07-07', games, rules).eligible).toBe(true);
     // But on 07-05 (same day as light outing, 2 days after heavy) heavy binds
     expect(assessPitcherRest('p1', '2026-07-05', games, rules).eligible).toBe(false);
   });
@@ -102,7 +103,7 @@ describe('assessPitcherRest', () => {
     expect(r.eligible).toBe(false);
     expect(r.needsCount).toBe(true);
     // absoluteMaxRest = 4 -> eligible on 07-09
-    expect(assessPitcherRest('p1', '2026-07-09', games, rules).eligible).toBe(true);
+    expect(assessPitcherRest('p1', '2026-07-10', games, rules).eligible).toBe(true);
   });
 
   it('correcting a historical count re-derives eligibility from the new value', () => {
@@ -110,9 +111,9 @@ describe('assessPitcherRest', () => {
     // 35-pitch breakpoint boundary matter here (<=35 -> 1 day, <=50 -> 2)
     const at34 = [completedOuting('g1', '2026-07-05', 'p1', 34)];
     const at40 = [completedOuting('g1', '2026-07-05', 'p1', 40)];
-    expect(assessPitcherRest('p1', '2026-07-06', at34, rules).eligible).toBe(true);
+    expect(assessPitcherRest('p1', '2026-07-07', at34, rules).eligible).toBe(true);
     expect(assessPitcherRest('p1', '2026-07-06', at40, rules).eligible).toBe(false);
-    expect(assessPitcherRest('p1', '2026-07-07', at40, rules).eligible).toBe(true);
+    expect(assessPitcherRest('p1', '2026-07-08', at40, rules).eligible).toBe(true);
   });
 
   it('innings-based rules count actual pitching outs', () => {
@@ -128,7 +129,7 @@ describe('assessPitcherRest', () => {
     const long = [completedOuting('g2', '2026-07-05', 'p1', 0, 5)];
     expect(assessPitcherRest('p1', '2026-07-06', short, inningsRules).eligible).toBe(true);
     expect(assessPitcherRest('p1', '2026-07-05', long, inningsRules).eligible).toBe(false);
-    expect(assessPitcherRest('p1', '2026-07-06', long, inningsRules).eligible).toBe(true);
+    expect(assessPitcherRest('p1', '2026-07-07', long, inningsRules).eligible).toBe(true);
   });
 
   it('limitType none is always eligible', () => {

@@ -1,6 +1,7 @@
 /* End-to-end smoke test: demo roster -> plan -> live out tracking ->
    completion with pitch confirmation -> history/stats -> data safety.
    Runs in America/Denver to verify the date fix in a US timezone. */
+import { spawn } from 'node:child_process';
 import { chromium } from 'playwright-core';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -22,11 +23,14 @@ const context = await browser.newContext({
   viewport: { width: 900, height: 700 }
 });
 const page = await context.newPage();
+const baseURL = process.env.E2E_BASE_URL || 'http://127.0.0.1:4173';
+const server = process.env.E2E_START_SERVER ? spawn(process.execPath, ['node_modules/vite/bin/vite.js','preview','--host','127.0.0.1'], {stdio:'ignore'}) : null;
+if(server) { process.on('exit',()=>server.kill()); for(let i=0;i<50;i++){try{await fetch(baseURL);break;}catch{await new Promise(r=>setTimeout(r,100));}} }
 const errors = [];
 page.on('pageerror', e => errors.push(e.message));
 page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
 
-await page.goto('http://localhost:4173');
+await page.goto(baseURL);
 await page.waitForSelector('.nav-title');
 ok('app loaded: ' + await page.textContent('.nav-title'));
 
@@ -97,7 +101,7 @@ const refilled2 = await page.locator('.lineup-grid .lineup-cell:not(.header):not
 refilled2 === 72 ? ok('Fill / Re-solve works') : fail(`Fill/Re-solve left ${refilled2}/72 cells`);
 
 // 8. Planned pitcher assignment goes through the central policy picker
-await page.click('.card:has(.card-title:text("Planned Pitchers")) button:has-text("+ Assign")');
+await page.locator('.card:has(.card-title:text("Planned Pitchers")) button').first().click();
 await page.waitForSelector('text=Primary Pitchers');
 // Fresh season: everyone should be plainly Eligible (no warnings)
 const eligibleCount = await page.locator('.pitcher-status:has-text("Eligible")').count();
@@ -122,6 +126,14 @@ const livePitcherName = (await page.textContent('.pitch-counter-name')).trim();
 for (let i = 0; i < 5; i++) await page.click('.pitch-btn-plus');
 const counted = (await page.textContent('.pitch-counter-display')).trim();
 counted === '5' ? ok(`pitch counter counts to 5 for ${livePitcherName}`) : fail(`pitch counter shows ${counted}`);
+await page.click('button:has-text("Correct Total")');
+await page.getByLabel('Corrected total pitches').fill('8');
+await page.getByRole('button',{name:'Set',exact:true}).click();
+await page.click('.pitch-btn-plus');
+(await page.textContent('.pitch-counter-display')).trim()==='9' ? ok('corrected total retains its baseline on +1') : fail('total correction lost baseline');
+await page.click('button:has-text("Correct Total")');
+await page.getByLabel('Corrected total pitches').fill('5');
+await page.getByRole('button',{name:'Set',exact:true}).click();
 await page.click('.pitch-counter-actions button:has-text("Done")');
 await page.waitForSelector('.pitch-counter', { state: 'detached' });
 
@@ -140,6 +152,7 @@ await page.locator('.option-item', { hasNot: page.locator('text=(current)') })
   .filter({ hasNot: page.locator('text=⚠') })
   .filter({ hasNot: page.locator('text=cannot') })
   .first().click();
+await page.getByRole('button',{name:'Confirm',exact:true}).click();
 await page.waitForTimeout(200);
 const newLivePitcher = (await page.textContent('.live-chip:has(.pos-text.P) .live-chip-name')).trim();
 newLivePitcher && !livePitcherName.startsWith(newLivePitcher)
@@ -161,6 +174,7 @@ await page.waitForSelector('.live-panel:has-text("Inning 2 of 6")');
 
 // One-tap End Inning records the remaining 3 outs of inning 2
 await page.click('button:has-text("End Inning (3 outs)")');
+await page.getByRole('button',{name:'Confirm',exact:true}).click();
 await page.waitForSelector('.live-panel:has-text("Inning 3 of 6")');
 ok('End Inning records the rest of the inning in one tap');
 
@@ -504,13 +518,13 @@ const mobile = await browser.newContext({
 const mpage = await mobile.newPage();
 mpage.on('pageerror', e => errors.push('mobile: ' + e.message));
 
-await mpage.goto('http://localhost:4173');
+await mpage.goto(baseURL);
 await mpage.waitForSelector('.nav-title');
 
 // PWA: manifest and service worker are served
-const manifestResp = await mpage.request.get('http://localhost:4173/manifest.webmanifest');
+const manifestResp = await mpage.request.get(baseURL+'/manifest.webmanifest');
 manifestResp.ok() ? ok('PWA manifest served') : fail(`manifest status ${manifestResp.status()}`);
-const swResp = await mpage.request.get('http://localhost:4173/sw.js');
+const swResp = await mpage.request.get(baseURL+'/sw.js');
 swResp.ok() ? ok('service worker served') : fail(`sw.js status ${swResp.status()}`);
 
 // Bottom tab bar sits at the bottom of the viewport
@@ -528,6 +542,7 @@ await mpage.click('.nav-tab:has-text("Game")');
 await mpage.waitForSelector('input[type="date"]');
 
 // Reorder batting order by dragging row 1's handle below row 3 (pointer events)
+await mpage.locator('.player-item .drag-handle').first().waitFor();
 const names = () => mpage.locator('.player-item .player-name').allTextContents();
 const before = await names();
 const handle = mpage.locator('.player-item .drag-handle').first();
@@ -584,5 +599,11 @@ await mobile.close();
 if (errors.length) fail('console errors: ' + errors.join(' | '));
 else ok('no console errors');
 
+const secondTab=await context.newPage();
+await secondTab.goto(baseURL);
+await secondTab.waitForSelector('text=Another tab may be editing');
+(await secondTab.locator('.nav-title').count())===0 ? ok('second tab cannot edit the shared dataset') : fail('second tab mounted a writer');
+await secondTab.close();
 await browser.close();
+server?.kill();
 console.log(process.exitCode ? 'E2E FAILED' : 'E2E PASSED');

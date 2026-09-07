@@ -95,8 +95,11 @@ export function validateFormation(
 /** Start live out tracking. The inning-1 plan seeds the first formation. */
 export function startLiveGame(game: Game): Game {
   if (game.status !== 'draft') return game;
+  const pitcher = Object.entries(planForInning(game, 1)).find(([, pos]) => pos === 'P')?.[0];
   return {
     ...game,
+    pitchingAppearances: pitcher ? [pitcher] : [],
+    pitchingStints: pitcher ? [pitcher] : [],
     status: 'live',
     live: {
       inning: 1,
@@ -134,7 +137,7 @@ export function recordOut(game: Game): Game {
       assignments: nextFormation(game, nextInning, assignments)
     };
   }
-  return { ...game, outs, live };
+  return trackMoundChange(game, { ...game, outs, live });
 }
 
 function nextFormation(
@@ -192,7 +195,7 @@ export function setLiveAssignment(game: Game, playerId: string, position: Assign
   const assignments = { ...game.live.assignments };
   if (position === null) delete assignments[playerId];
   else assignments[playerId] = position;
-  return { ...game, live: { ...game.live, assignments } };
+  return trackMoundChange(game, { ...game, live: { ...game.live, assignments } });
 }
 
 /**
@@ -211,7 +214,19 @@ export function applyLiveSwap(game: Game, playerId: string, position: Assignment
     if (holder) assignments[holder] = oldPos;
   }
   assignments[playerId] = position;
-  return { ...game, live: { ...game.live, assignments } };
+  return trackMoundChange(game, { ...game, live: { ...game.live, assignments } });
+}
+
+/** Keep zero-out mound appearances visible for explicit completion review. */
+function trackMoundChange(before: Game, after: Game): Game {
+  const pitcher = Object.entries(after.live?.assignments || {}).find(([, pos]) => pos === 'P')?.[0];
+  const previous = Object.entries(before.live?.assignments || {}).find(([, pos]) => pos === 'P')?.[0];
+  if (!pitcher || pitcher === previous) return after;
+  return { ...after, pitchingAppearances: [...new Set([...(before.pitchingAppearances || []), pitcher])], pitchingStints: [...(before.pitchingStints || []), pitcher] };
+}
+
+function checkCount(count: number) {
+  if (!Number.isInteger(count) || count < 0) throw new Error('Pitch counts must be non-negative whole numbers');
 }
 
 /** Total pitch count entry for a player, creating a blank one if missing. */
@@ -224,26 +239,30 @@ export function getPitchCountEntry(game: Game, playerId: string): PitchCountEntr
 /** Set the working per-inning count from the live counter. */
 export function setInningPitches(game: Game, playerId: string, inning: number, count: number): Game {
   const entry = getPitchCountEntry(game, playerId);
+  checkCount(count);
+  const adjustment = entry.adjustment ?? entry.live - Object.values(entry.byInning).reduce((a, b) => a + b, 0);
   const byInning = { ...entry.byInning, [inning]: count };
-  const live = Object.values(byInning).reduce((a, b) => a + b, 0);
+  const live = Object.values(byInning).reduce((a, b) => a + b, 0) + adjustment;
+  checkCount(live);
   return {
     ...game,
     pitchCounts: {
       ...game.pitchCounts,
-      [playerId]: { ...entry, byInning, live }
+      [playerId]: { ...entry, byInning, live, adjustment }
     }
   };
 }
 
 /** Directly correct the working total (coach reconciles mid-game). */
 export function setLivePitchTotal(game: Game, playerId: string, total: number): Game {
+  checkCount(total);
   const entry = getPitchCountEntry(game, playerId);
   return {
     ...game,
     pitchCounts: {
       ...game.pitchCounts,
-      // Direct correction supersedes the per-inning tallies.
-      [playerId]: { ...entry, live: total, byInning: {} }
+      // Preserve inning tallies; reconcile the unallocated difference.
+      [playerId]: { ...entry, live: total, adjustment: total - Object.values(entry.byInning).reduce((a, b) => a + b, 0) }
     }
   };
 }
@@ -283,7 +302,7 @@ export interface PitchConfirmation {
  * counter says they pitched even if no P out was recorded).
  */
 export function playersNeedingPitchConfirmation(game: Game): string[] {
-  const ids = new Set<string>(Object.keys(pitchingOutsByPlayer(game)));
+  const ids = new Set<string>([...Object.keys(pitchingOutsByPlayer(game)), ...(game.pitchingAppearances || [])]);
   for (const [pid, entry] of Object.entries(game.pitchCounts || {})) {
     if (entry.live > 0 || entry.confirmed != null) ids.add(pid);
   }
@@ -314,6 +333,7 @@ export function completeGame(
 
   const pitchCounts = { ...game.pitchCounts };
   for (const c of confirmations) {
+    if (c.pitches !== null) checkCount(c.pitches);
     const entry = getPitchCountEntry(game, c.playerId);
     pitchCounts[c.playerId] =
       c.pitches === null
@@ -379,10 +399,10 @@ export function editOutAssignments(game: Game, seq: number, assignments: Record<
 export function insertOutAfter(game: Game, seq: number): Game {
   const idx = game.outs.findIndex(o => o.seq === seq);
   const template = idx >= 0 ? game.outs[idx] : game.outs[0];
-  if (!template) return game;
+  const seed = template || { seq: 1, inning: 1, outInInning: 1 as const, assignments: planForInning(game, 1) };
   const inserted: DefensiveOut = {
-    ...template,
-    assignments: { ...template.assignments },
+    ...seed,
+    assignments: { ...seed.assignments },
     estimated: false
   };
   const outs = [...game.outs];
@@ -398,6 +418,7 @@ export function deleteOutAt(game: Game, seq: number): Game {
 
 /** Correct a completed game's confirmed pitch count (from history). */
 export function correctConfirmedPitches(game: Game, playerId: string, pitches: number | null): Game {
+  if (pitches !== null) checkCount(pitches);
   const entry = getPitchCountEntry(game, playerId);
   return {
     ...game,
@@ -445,7 +466,7 @@ export function normalizeGamePlan(game: Game): Game {
     const next: Record<number, number> = {};
     for (const [innStr, runs] of Object.entries(side || {})) {
       const inn = parseInt(innStr, 10);
-      if (inn >= 1 && inn <= maxInning) next[inn] = runs;
+      if (inn >= 1 && (game.status !== 'draft' || inn <= maxInning)) next[inn] = runs;
     }
     return next;
   };
@@ -559,4 +580,14 @@ export function validateGamePlan(game: Game): string[] {
     }
   }
   return issues;
+}
+
+/** Coach-entered outside workload has no inferred defensive participation. */
+export function externalPitchingGame(id: string, date: string, player: Player, pitches: number | null, source: string): Game {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !source.trim()) throw new Error('Date and source are required');
+  if (pitches !== null) checkCount(pitches);
+  return {schemaVersion:2,id,date,opponent:source.trim(),workloadSource:source.trim(),innings:1,fielderCount:9,
+    battingOrder:[player.id],availability:{[player.id]:true},pitcherAssignments:{},lockedCells:{},lineup:{},
+    score:{us:{},them:{}},status:'completed',live:null,outs:[],exitedPlayers:{},playerNames:{[player.id]:player.name},
+    pitchingAppearances:[player.id],pitchCounts:{[player.id]:{live:pitches??0,byInning:{},adjustment:pitches??0,confirmed:pitches,status:pitches===null?'unknown':'confirmed'}}};
 }

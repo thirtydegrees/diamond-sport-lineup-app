@@ -1,3 +1,4 @@
+import { Sync, getDataOwner } from '../services/sync';
 /* ============================================
    Diamond Lineup - Lineup Grid Component
    ============================================ */
@@ -15,7 +16,7 @@ export function LineupGrid({
 }) {
   const [scoreEdit, setScoreEdit] = React.useState(null);
 
-  const innings = game?.innings || 7;
+  const innings = Math.max(game?.innings || 7, game?.live?.inning || 1, ...Object.keys(game?.score?.us || {}).map(Number), ...Object.keys(game?.score?.them || {}).map(Number));
 
   // Get all players in batting order (including exited - they show grayed out)
   const allPlayers = React.useMemo(() => {
@@ -177,8 +178,8 @@ export function LineupGrid({
 
       {/* Score Section */}
       <div className="score-section">
-        {renderScoreRow('us', 'Us', usTotal)}
-        {renderScoreRow('them', 'Them', themTotal)}
+        {renderScoreRow('us', Sync.currentTeam?.name || getDataOwner()?.teamName || 'Our Team', usTotal)}
+        {renderScoreRow('them', game.opponent || 'Opponent', themTotal)}
       </div>
     </div>
   );

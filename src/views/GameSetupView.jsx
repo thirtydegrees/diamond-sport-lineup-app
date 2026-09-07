@@ -172,6 +172,10 @@ export function GameSetupView({ onStartGame }) {
   // edits can't leave hidden assignments, locks, or scores behind (H9).
   const handleContinue = () => {
     const gameData = normalizeGamePlan({
+      ...game,
+      rulesSnapshot: game?.rulesSnapshot || structuredClone(settings.pitchRules),
+      rulesVersion: game?.rulesVersion || settings.pitchRulePreset + ':2026-09',
+      sport: game?.sport || settings.sport,
       schemaVersion: 2,
       id: game?.id || newId(),
       date: gameDate,
@@ -244,7 +248,7 @@ export function GameSetupView({ onStartGame }) {
             >
               <option value={5}>5 innings</option>
               <option value={6}>6 innings</option>
-              <option value={7}>7 innings</option>
+              <option value={7}>7 innings</option><option value={9}>9 innings</option>
             </select>
             <p className="form-hint">Can add extra innings during game if needed.</p>
           </div>

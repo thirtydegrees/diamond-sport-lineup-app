@@ -123,10 +123,11 @@ function PitchCountRow({ game, playerId, playerName, onCorrect }) {
   const outs = pitchingOutsByPlayer(game)[playerId] || 0;
   const [editing, setEditing] = React.useState(false);
   const [value, setValue] = React.useState('');
+  const [ack, setAck] = React.useState(false);
 
   const commit = () => {
-    const n = parseInt(value, 10);
-    if (Number.isFinite(n) && n >= 0) {
+    const n = Number(value);
+    if (value.trim() && Number.isInteger(n) && n >= 0 && (n > 0 || ack)) {
       onCorrect(playerId, n);
       setEditing(false);
     }
@@ -154,7 +155,9 @@ function PitchCountRow({ game, playerId, playerName, onCorrect }) {
             onKeyDown={(e) => { if (e.key === 'Enter') commit(); }}
             aria-label={`Corrected pitches for ${playerName(playerId)}`}
           />
+          {value === '0' && <label className="text-small"><input type="checkbox" checked={ack} onChange={e=>setAck(e.target.checked)}/>I verified exactly zero pitches</label>}
           <button className="btn btn-sm btn-primary" onClick={commit}>Save</button>
+          <button className="btn btn-sm btn-secondary" onClick={()=>{onCorrect(playerId,null);setEditing(false);}}>Count Unknown</button>
           <button className="btn btn-sm btn-ghost" onClick={() => setEditing(false)}>✕</button>
         </>
       ) : (
@@ -164,7 +167,7 @@ function PitchCountRow({ game, playerId, playerName, onCorrect }) {
           </span>
           <button
             className="btn btn-sm btn-secondary"
-            onClick={() => { setValue(String(entry.confirmed ?? entry.live)); setEditing(true); }}
+            onClick={() => { setValue(String(entry.confirmed ?? entry.live)); setAck(false); setEditing(true); }}
           >
             ✏️
           </button>
@@ -260,6 +263,7 @@ function ParticipationEditor({ game, playerName, onChange }) {
 
   return (
     <div style={{ marginTop: 'var(--space-sm)' }}>
+      {game.outs.length === 0 && <button className="btn btn-secondary" onClick={()=>{onChange(insertOutAfter(game,0));setEditSeq(1);}}>Add First Out</button>}
       {game.outs.map(out => (
         <div
           key={out.seq}
@@ -319,6 +323,7 @@ function ParticipationEditor({ game, playerName, onChange }) {
 function GameDetail({ game, playerName, onDelete, onCorrectPitches, onUpdateGame }) {
   const [editParticipation, setEditParticipation] = React.useState(false);
   const pitcherIds = new Set([
+    ...(game.pitchingAppearances || []),
     ...Object.keys(pitchingOutsByPlayer(game)),
     ...Object.entries(game.pitchCounts || {})
       .filter(([, e]) => e.status === 'unknown' || (e.confirmed ?? e.live) > 0)
@@ -340,7 +345,7 @@ function GameDetail({ game, playerName, onDelete, onCorrectPitches, onUpdateGame
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
         <span className="text-muted text-small" style={{ flex: 1 }}>Actual playing time</span>
-        {game.outs?.length > 0 && (
+        {(
           <button className="btn btn-sm btn-secondary" onClick={() => setEditParticipation(v => !v)}>
             {editParticipation ? 'Done Editing' : '✏️ Fix Participation'}
           </button>
@@ -352,6 +357,7 @@ function GameDetail({ game, playerName, onDelete, onCorrectPitches, onUpdateGame
         <ParticipationSummary game={game} playerName={playerName} />
       )}
 
+      <label className="text-small">Add a missed pitcher (including zero outs)<select className="form-select" value="" onChange={e=>{if(e.target.value)onCorrectPitches(e.target.value,null);}}><option value="">Choose player</option>{game.battingOrder.filter(id=>!pitcherIds.has(id)).map(id=><option key={id} value={id}>{playerName(id)}</option>)}</select></label>
       {pitcherIds.size > 0 && (
         <div style={{ marginTop: 'var(--space-md)' }}>
           <div className="text-muted text-small" style={{ marginBottom: '4px' }}>
