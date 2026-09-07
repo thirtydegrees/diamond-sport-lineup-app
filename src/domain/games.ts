@@ -591,3 +591,17 @@ export function externalPitchingGame(id: string, date: string, player: Player, p
     score:{us:{},them:{}},status:'completed',live:null,outs:[],exitedPlayers:{},playerNames:{[player.id]:player.name},
     pitchingAppearances:[player.id],pitchCounts:{[player.id]:{live:pitches??0,byInning:{},adjustment:pitches??0,confirmed:pitches,status:pitches===null?'unknown':'confirmed'}}};
 }
+
+/** Existing workloadSource is the backwards-compatible outside-workload discriminator. */
+export function isOutsideWorkload(game: Game): boolean {
+  return typeof game.workloadSource === 'string' && game.workloadSource.trim().length > 0;
+}
+
+/** Only one inning changes; score corrections never change outs or pitch counts. */
+export function updateInningRuns(game: Game, side: 'us' | 'them', inning: number, value: number, delta = false): Game {
+  if (side !== 'us' && side !== 'them') throw new Error('Invalid scoring team');
+  if (!Number.isSafeInteger(inning) || inning < 1) throw new Error('Invalid scoring inning');
+  const runs = delta ? (game.score[side]?.[inning] || 0) + value : value;
+  if (!Number.isSafeInteger(value) || !Number.isSafeInteger(runs) || runs < 0) throw new Error('Runs must be a nonnegative whole number');
+  return {...game, score: {...game.score, [side]: {...game.score[side], [inning]: runs}}};
+}

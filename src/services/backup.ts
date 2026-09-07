@@ -84,6 +84,7 @@ function validateSettings(raw: unknown): Settings {
 
 function validateGameShape(raw: unknown, index: number): void {
   if (!isRecord(raw)) throw new BackupError(`game #${index + 1} is not an object`);
+  if (raw.workloadSource !== undefined && (typeof raw.workloadSource !== 'string' || !raw.workloadSource.trim())) throw new BackupError(`game #${index + 1} has invalid outside workload source`);
   if (typeof raw.id !== 'string' || typeof raw.date !== 'string') {
     throw new BackupError(`game #${index + 1} is missing id/date`);
   }

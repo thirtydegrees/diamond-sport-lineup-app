@@ -28,7 +28,7 @@ const MIN_PASSWORD_LENGTH = 8;
 
 export function AccountCard() {
   const {
-    user, syncStatus, provisioningError, settings, setSettings,
+    user, syncStatus, provisioningError, settings, setSettings, activeTeam,
     signIn, signUp, signOut, syncNow, switchTeam,
     resetPassword, resendConfirmation, showToast
   } = React.useContext(AppContext);
@@ -49,7 +49,7 @@ export function AccountCard() {
   const [teams, setTeams] = React.useState(null);
   const [newTeamName, setNewTeamName] = React.useState('');
   const [showNewTeam, setShowNewTeam] = React.useState(false);
-  const currentTeam = Sync.currentTeam;
+  const currentTeam = activeTeam ? {id: activeTeam.teamId, name: activeTeam.teamName} : null;
 
   React.useEffect(() => {
     let cancelled = false;
@@ -59,7 +59,7 @@ export function AccountCard() {
         .catch(() => { if (!cancelled) setTeams(null); });
     }
     return () => { cancelled = true; };
-  }, [user, syncStatus === 'synced']); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [user, activeTeam?.teamId, activeTeam?.teamName, syncStatus === 'synced']); // eslint-disable-line react-hooks/exhaustive-deps
 
   const validateInputs = () => {
     if (!EMAIL_RE.test(email.trim())) {
@@ -103,8 +103,8 @@ export function AccountCard() {
       } else {
         setTeams(null);
       }
-    } catch {
-      // signOut already surfaced the failure
+    } catch (e) {
+      setError(e.message || 'Could not sign out. Please try again.');
     } finally {
       setBusy(false);
     }
@@ -172,8 +172,10 @@ export function AccountCard() {
             </div>
           )}
         </div>
+        {user && <button className="btn btn-secondary account-sign-out" disabled={busy} onClick={() => handleSignOut(false)}>Sign Out</button>}
       </div>
       <div className="card-body">
+        {!user && <p className="text-small mb-md">Signed out. Sign in below to sync your team. Saved team data stays on this device.</p>}
         {Sync.recoveryCopies().length>0 && <details><summary>Recovery copies on this device</summary>{Sync.recoveryCopies().map(copy=><button className="btn btn-secondary" key={copy.key} onClick={()=>{const url=URL.createObjectURL(new Blob([JSON.stringify({app:'diamond-lineup',version:2,exportDate:new Date().toISOString(),data:copy.data},null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=`diamond-recovery-${copy.key.slice(13)}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}}>Download {copy.teamName} recovery</button>)}</details>}
 
         {user ? (
@@ -196,19 +198,13 @@ export function AccountCard() {
               >
                 🔄 Sync Now
               </button>
-              <button
-                className="btn btn-secondary"
-                disabled={busy}
-                onClick={() => handleSignOut(false)}
-              >
-                Sign Out
-              </button>
+
             </div>
 
             {syncStatus === 'conflict' && <div role="alert"><p>{Sync.lastError}</p><p>Download your local backup below before loading the cloud copy. A recovery copy also stays on this device.</p><button className="btn btn-secondary" onClick={async()=>{try{await Sync.useCloudCopy();}catch(e){setError(e.message);}}}>Load Cloud Copy</button></div>}
             <p className="text-small">Sync Now checks for cloud changes and sends pending edits. Offline edits stay on this device; simultaneous edits require review.</p><p className="text-small">Last checked: {Sync.lastPulledAt ? new Date(Sync.lastPulledAt).toLocaleTimeString() : 'Not yet'}</p>
-            <div className="form-group"><label className="form-label">Team name</label><input className="form-input" value={rename} placeholder={currentTeam?.name || 'Team name'} onChange={e=>setRename(e.target.value)}/><button className="btn btn-secondary" disabled={!rename.trim() || busy} onClick={async()=>{setBusy(true);try{await Sync.renameTeam(rename);setRename('');}catch(e){setError(e.message);}finally{setBusy(false);}}}>Rename Team</button></div>
-            {!settings.onboardingComplete && currentTeam && <div className="card"><div className="card-body"><strong>Set up this team</strong><p className="text-small">Rename your team above, then choose its sport and age/rules group. You can adjust rules in Settings.</p><select aria-label="Team sport" className="form-select" value={teamType} onChange={e=>{setTeamType(e.target.value);setPresetId(getPresetsForSport(e.target.value)[0].id);}}><option value="baseball">Baseball</option><option value="softball">Softball</option></select><select aria-label="Team rules" className="form-select" value={presetId} onChange={e=>setPresetId(e.target.value)}>{getPresetsForSport(teamType).map(p=><option key={p.id} value={p.id}>{p.label}</option>)}</select><button className="btn btn-primary" onClick={()=>setSettings({...settings,sport:teamType,teamType,pitchRulePreset:presetId,pitchRules:structuredClone(getPreset(presetId).rules),onboardingComplete:true})}>Save Team Setup</button></div></div>}
+            <div className="form-group team-setup-controls"><label className="form-label">Team name</label><input className="form-input" value={rename} placeholder={currentTeam?.name || 'Team name'} onChange={e=>setRename(e.target.value)}/><button className="btn btn-secondary" disabled={!rename.trim() || busy} onClick={async()=>{setBusy(true);try{await Sync.renameTeam(rename);setRename('');}catch(e){setError(e.message);}finally{setBusy(false);}}}>Rename Team</button></div>
+            {!settings.onboardingComplete && currentTeam && <div className="card"><div className="card-body team-setup-controls"><strong>Set up this team</strong><p className="text-small">Rename your team above, then choose its sport and age/rules group. You can adjust rules in Settings.</p><select aria-label="Team sport" className="form-select" value={teamType} onChange={e=>{setTeamType(e.target.value);setPresetId(getPresetsForSport(e.target.value)[0].id);}}><option value="baseball">Baseball</option><option value="softball">Softball</option></select><select aria-label="Team rules" className="form-select" value={presetId} onChange={e=>setPresetId(e.target.value)}>{getPresetsForSport(teamType).map(p=><option key={p.id} value={p.id}>{p.label}</option>)}</select><button className="btn btn-primary" onClick={()=>setSettings({...settings,sport:teamType,teamType,pitchRulePreset:presetId,pitchRules:structuredClone(getPreset(presetId).rules),onboardingComplete:true})}>Save Team Setup</button></div></div>}
             {/* Teams */}
             <div style={{ marginTop: 'var(--space-md)', paddingTop: 'var(--space-md)', borderTop: '1px solid var(--border-light)' }}>
               <div className="text-muted text-small" style={{ marginBottom: '6px' }}>

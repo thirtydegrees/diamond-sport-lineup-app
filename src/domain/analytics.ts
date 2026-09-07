@@ -35,6 +35,7 @@ export interface PlayerSeasonStats {
 }
 
 export interface PitcherGameLoad {
+  workloadSource?: string;
   gameId: string;
   date: string;
   opponent: string;
@@ -169,9 +170,11 @@ export function computePitchingStats(
   range?: DateRange
 ): PitcherSeasonStats[] {
   const opponentByGame = new Map<string, string>();
+  const sourceByGame = new Map<string, string>();
   const nameByPlayer = new Map<string, string>();
   games.forEach(g => {
     opponentByGame.set(g.id, g.opponent || '');
+    if (g.workloadSource) sourceByGame.set(g.id, g.workloadSource);
     Object.entries(g.playerNames || {}).forEach(([id, name]) => nameByPlayer.set(id, name));
   });
   roster.forEach(p => nameByPlayer.set(p.id, p.name));
@@ -205,6 +208,7 @@ export function computePitchingStats(
       gameId: outing.gameId,
       date: outing.date,
       opponent: opponentByGame.get(outing.gameId) || '',
+      workloadSource: sourceByGame.get(outing.gameId),
       pitches: outing.pitches,
       pitchingOuts: outing.pitchingOuts,
       estimated: outing.estimated

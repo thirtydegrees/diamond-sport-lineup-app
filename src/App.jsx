@@ -3,7 +3,6 @@
    ============================================ */
 
 import React from 'react';
-import { Sync, getDataOwner } from './services/sync';
 import { UpdateNotice } from './components/UpdateNotice';
 import { AppContext, AppProvider } from './state/AppContext';
 import { ConfirmDialog } from './components/ui';
@@ -20,7 +19,7 @@ import { HistoryView } from './views/HistoryView';
 // Navigation Component
 // ============================================
 function Navigation({ currentView, onViewChange }) {
-  const { settings, syncStatus } = React.useContext(AppContext);
+  const { settings, activeTeam, user } = React.useContext(AppContext);
   const sportEmoji = settings.sport === 'softball' ? '🥎' : '⚾';
   const tabs = [
     { id: 'roster', label: 'Roster', icon: '👥' },
@@ -34,7 +33,7 @@ function Navigation({ currentView, onViewChange }) {
   return (
     <nav className="nav">
       <div className="nav-content">
-        <span className="nav-title">{sportEmoji} Diamond Lineup <small>{Sync.currentTeam?.name || getDataOwner()?.teamName || 'Local team'}</small></span>
+        <div className="nav-brand"><span className="nav-title">{sportEmoji} Diamond Lineup</span><span className="active-team"><span className="active-team-label">{user ? 'Team' : activeTeam ? 'Saved team' : 'Team'}</span> <strong>{activeTeam?.teamName || 'Local team'}</strong></span></div>
         <div className="nav-tabs">
           {tabs.map(tab => (
             <button
@@ -56,18 +55,33 @@ function Navigation({ currentView, onViewChange }) {
 // Main App Component
 // ============================================
 function TeamWorkspace() {
-  const { remoteVersion } = React.useContext(AppContext);
-  return <AppContent key={remoteVersion}/>;
+  return <AppContent />;
 }
 
 function AppContent() {
-  const { game, setGame, showToast } = React.useContext(AppContext);
+  const { game, setGame, showToast, remoteVersion, switchingTeam, signedOutVersion } = React.useContext(AppContext);
   const [view, setView] = React.useState('roster');
   const [showLineup, setShowLineup] = React.useState(false);
   const [showGameChoice, setShowGameChoice] = React.useState(false);
   const [confirmNewGame, setConfirmNewGame] = React.useState(false);
 
   const isLiveGame = game?.status === 'live';
+
+  React.useLayoutEffect(() => {
+    // Keep navigation, but discard dialogs and form state from the old snapshot.
+    setShowLineup(wasOpen => game?.status === 'live' || (wasOpen && Object.keys(game?.lineup || {}).length > 0));
+    setShowGameChoice(false);
+    setConfirmNewGame(false);
+  }, [remoteVersion]);
+
+  React.useLayoutEffect(() => {
+    if (!signedOutVersion) return;
+    setView('settings');
+    setShowLineup(false);
+    setShowGameChoice(false);
+    setConfirmNewGame(false);
+    window.scrollTo(0, 0);
+  }, [signedOutVersion]);
 
   const handleViewChange = (newView) => {
     if (newView === 'game') {
@@ -123,13 +137,14 @@ function AppContent() {
 
   return (
     <div className="app">
+      <div inert={switchingTeam ? '' : undefined}>
       <Navigation
         currentView={view}
         onViewChange={handleViewChange}
       />
 
       <UpdateNotice />
-      <main className="main">
+      <main className="main" key={`${remoteVersion}:${signedOutVersion}`}>
         {view === 'roster' && <RosterView />}
 
         {view === 'game' && showGameChoice && (
@@ -169,6 +184,9 @@ function AppContent() {
 
         {view === 'settings' && <SettingsView />}
       </main>
+
+      </div>
+      {switchingTeam && <div className="team-transition" role="status">Switching to {switchingTeam.name}…</div>}
 
       {confirmNewGame && (
         <ConfirmDialog

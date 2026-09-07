@@ -1,3 +1,5 @@
+import { externalPitchingGame, isOutsideWorkload } from '../domain/games';
+import { deriveOutings } from '../domain/pitching';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BackupError, buildBackup, validateBackup, restoreBackup } from './backup';
 import { Storage } from './storage';
@@ -152,5 +154,20 @@ describe('deep v2 validation (malformed nested structures)', () => {
 
   it('rejects malformed live state', () => {
     expect(() => validateBackup(v2With({ status: 'live', live: { inning: 'one' } }))).toThrow(/live state/);
+  });
+});
+
+
+describe('outside workload classification', () => {
+  it('survives backup hydration and counts as workload without replacing the last game', () => {
+    seedDevice();
+    const outside = externalPitchingGame('outside', '2026-07-02', makePlayer('a', 'Ava'), 25, 'Summer camp');
+    Storage.saveGames([...Storage.getGames(), outside]);
+    const restored = validateBackup(JSON.parse(JSON.stringify(buildBackup()))).data.games;
+    expect(isOutsideWorkload(restored[1])).toBe(true);
+    expect(deriveOutings(restored).find(o => o.gameId === 'outside')?.pitches).toBe(25);
+    expect(Storage.getLastGame()?.id).toBe('g1');
+    Storage.saveGames([outside]);
+    expect(Storage.getLastGame()).toBeNull();
   });
 });

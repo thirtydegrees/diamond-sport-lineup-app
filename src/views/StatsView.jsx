@@ -1,3 +1,4 @@
+import { isOutsideWorkload } from '../domain/games';
 /* ============================================
    Diamond Lineup - Season Stats View
 
@@ -255,8 +256,8 @@ function PitcherWorkloadCard({ pitching, pitchRules }) {
             <table className="stats-table">
               <thead>
                 <tr>
-                  <th>Pitcher</th><th>Games</th><th>Pitches</th><th>Innings</th>
-                  <th>Avg/Game</th><th>Last 7 Days</th>
+                  <th>Pitcher</th><th>Outings</th><th>Pitches</th><th>Innings</th>
+                  <th>Avg/Outing</th><th>Last 7 Days</th>
                 </tr>
               </thead>
               <tbody>
@@ -299,13 +300,13 @@ function PitcherWorkloadCard({ pitching, pitchRules }) {
                       className={`workload-col ${g.pitches === null ? 'unknown' : ''}`}
                       style={{ height: Math.max(3, ((g.pitches || 0) / scaleMax) * PLOT_H) }}
                       onPointerEnter={(e) => show(e, p.name, [
-                        `${g.date}${g.opponent ? ` vs ${g.opponent}` : ''}`,
+                        `${g.date}${g.workloadSource ? ` · Outside pitching: ${g.workloadSource}` : g.opponent ? ` vs ${g.opponent}` : ''}`,
                         g.pitches === null
                           ? `Count needed · ${formatOutsAsInnings(g.pitchingOuts)} innings pitched`
                           : `${g.pitches} pitches, ${formatOutsAsInnings(g.pitchingOuts)} inning${g.pitchingOuts === 3 ? '' : 's'}`
                       ])}
                       onPointerDown={(e) => show(e, p.name, [
-                        `${g.date}${g.opponent ? ` vs ${g.opponent}` : ''}`,
+                        `${g.date}${g.workloadSource ? ` · Outside pitching: ${g.workloadSource}` : g.opponent ? ` vs ${g.opponent}` : ''}`,
                         g.pitches === null
                           ? `Count needed · ${formatOutsAsInnings(g.pitchingOuts)} innings pitched`
                           : `${g.pitches} pitches, ${formatOutsAsInnings(g.pitchingOuts)} inning${g.pitchingOuts === 3 ? '' : 's'}`
@@ -347,7 +348,7 @@ export function StatsView() {
   );
 
   const gamesInRange = games.filter(g =>
-    g.status === 'completed' &&
+    g.status === 'completed' && !isOutsideWorkload(g) &&
     (!range?.from || g.date >= range.from) && (!range?.to || g.date <= range.to)
   );
   const totalOuts = seasonStats.reduce((sum, s) => sum + s.outs, 0);

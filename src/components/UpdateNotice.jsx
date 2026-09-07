@@ -28,9 +28,9 @@ export function UpdateNotice() {
       document.removeEventListener('visibilitychange', check);
     };
   }, [registration]);
+  if (!refresh) return null;
   return (
     <div className="no-print" style={{ padding: '4px 16px' }}>
-      <small>Build {__BUILD_ID__}</small>
       {refresh && (
         <p role="status">
           An update is available. Finish open forms before updating.{' '}

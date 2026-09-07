@@ -18,7 +18,7 @@ import { newId } from '../domain/ids';
 import { normalizePitchRules } from '../domain/pitching';
 import { Storage, StorageKeys } from '../services/storage';
 import { supabase } from '../services/supabaseClient';
-import { Sync } from '../services/sync';
+import { Sync, getDataOwner } from '../services/sync';
 import { authRedirectURL } from '../services/supabaseClient';
 import { Modal } from '../components/ui';
 
@@ -39,6 +39,10 @@ export function AppProvider({ children }) {
   const [provisioningError, setProvisioningError] = React.useState(null);
   const initialSyncRan = React.useRef(false);
   const sessionId = React.useRef(null);
+  const [signedOutVersion, setSignedOutVersion] = React.useState(0);
+  const [activeTeam, setActiveTeam] = React.useState(() => getDataOwner());
+  const [switchingTeam, setSwitchingTeam] = React.useState(null);
+  const switchingRef = React.useRef(false);
   const [remoteVersion, setRemoteVersion] = React.useState(0);
 
   const showToast = React.useCallback((message, type = 'success') => {
@@ -55,7 +59,7 @@ export function AppProvider({ children }) {
     rawSetRoster(data.roster); rawSetSettings(data.settings); rawSetGame(data.currentGame);
     rawSetGames(data.games); rawSetDefaultBattingOrder(data.defaultBattingOrder);
   }, []);
-  const reloadFromStorage = React.useCallback(() => {hydrate(Storage.exportDataSet()); setRemoteVersion(v=>v+1);}, [hydrate]);
+  const reloadFromStorage = React.useCallback(() => {hydrate(Storage.exportDataSet()); setActiveTeam(getDataOwner()); setRemoteVersion(v=>v+1);}, [hydrate]);
   const commitData = React.useCallback((patch) => {
     const next = {...dataRef.current, ...patch};
     if(patch.settings)next.settings={...patch.settings,pitchRules:normalizePitchRules(patch.settings.pitchRules)};
@@ -75,16 +79,21 @@ export function AppProvider({ children }) {
   }, [settings.darkMode]);
 
   // Surface sync status changes
-  React.useEffect(() => Sync.onStatus(setSyncStatus), []);
+  React.useEffect(() => Sync.onStatus(status => {
+    setSyncStatus(status);
+    setActiveTeam(getDataOwner());
+  }), []);
 
   // Remote hydration changes state without marking it as a local edit.
   React.useEffect(() => Sync.onRemoteApplied(() => {
     reloadFromStorage();
-    showToast('Updated with newer changes from your account');
   }), [reloadFromStorage, showToast]);
 
   // Account-conflict guard: local data owned by a different account
   const [accountConflict, setAccountConflict] = React.useState(null);
+  const [accountTransitionBusy, setAccountTransitionBusy] = React.useState(false);
+  const [accountTransitionError, setAccountTransitionError] = React.useState(null);
+  const accountTransitionRef = React.useRef(false);
   // Supabase password-recovery flow (user arrived via a reset email)
   const [passwordRecovery, setPasswordRecovery] = React.useState(false);
 
@@ -94,11 +103,13 @@ export function AppProvider({ children }) {
     // boundary - make the user choose explicitly.
     const conflict = Sync.checkAccountConflict(sessionUser.id);
     if (conflict) {
+      setAccountTransitionError(null);
       setAccountConflict({ owner: conflict, user: sessionUser });
       return false;
     }
     try {
       const decision = await Sync.initialSync(sessionUser.id);
+      if (sessionId.current !== sessionUser.id) return false;
       if (decision === 'applyRemote') {
         reloadFromStorage();
         showToast('Team data loaded from your account');
@@ -141,7 +152,10 @@ export function AppProvider({ children }) {
         // NOW so no queued write can outlive the account (H4). Dirty flags
         // and the data-owner marker survive inside the sync service.
         initialSyncRan.current = false;
+        if (sessionId.current) setSignedOutVersion(v => v + 1);
         sessionId.current = null;
+        setAccountConflict(null);
+        setPasswordRecovery(false);
         Sync.disable();
         setUser(null);
         setProvisioningError(null);
@@ -159,20 +173,29 @@ export function AppProvider({ children }) {
   /** Resolve an account conflict: replace device data with this account's. */
   const resolveAccountConflict = React.useCallback(async (choice) => {
     const conflict = accountConflict;
-    setAccountConflict(null);
-    if (!conflict) return;
-    if (choice === 'replace') {
-      try {
+    if (!conflict || accountTransitionRef.current) return;
+    accountTransitionRef.current = true;
+    setAccountTransitionBusy(true);
+    setAccountTransitionError(null);
+    try {
+      if (choice === 'replace') {
         await Sync.adoptAccount(conflict.user.id);
+        if (sessionId.current !== conflict.user.id) return;
+        initialSyncRan.current = true;
+        setProvisioningError(null);
+        setAccountConflict(null);
         reloadFromStorage();
-        showToast('Loaded your account data on this device');
-      } catch (e) {
-        setProvisioningError(e?.message || 'Cloud sync is unavailable');
-        showToast('Could not load your account data - working locally', 'error');
+        showToast(`Opened ${conflict.user.email}'s teams`);
+      } else {
+        const { error } = await supabase.auth.signOut({ scope: 'local' });
+        if (error) throw error;
+        setAccountConflict(null);
       }
-    } else {
-      // Sign out and leave the other account's local data untouched
-      await supabase.auth.signOut();
+    } catch (e) {
+      if (sessionId.current === conflict.user.id) setAccountTransitionError(e?.message || 'Could not open this account. Your saved team is unchanged.');
+    } finally {
+      accountTransitionRef.current = false;
+      setAccountTransitionBusy(false);
     }
   }, [accountConflict, reloadFromStorage, showToast]);
 
@@ -199,11 +222,11 @@ export function AppProvider({ children }) {
    * sign-in to the same account.
    */
   const signOut = React.useCallback(async ({ force = false } = {}) => {
-    await Sync.flushBeforeSignOut();
+    if (!force) await Sync.flushBeforeSignOut();
     if (!force && Sync.hasPendingChanges()) {
       return { pending: true };
     }
-    const { error } = await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut({ scope: 'local' });
     if (error) {
       // The session may still be alive; do NOT claim a sign-out happened
       showToast(`Sign out failed: ${error.message}`, 'error');
@@ -213,6 +236,11 @@ export function AppProvider({ children }) {
     // belt-and-suspenders for environments where the event is delayed
     Sync.disable();
     initialSyncRan.current = false;
+    if (sessionId.current) setSignedOutVersion(v => v + 1);
+    sessionId.current = null;
+    setProvisioningError(null);
+    setAccountConflict(null);
+    setPasswordRecovery(false);
     setUser(null);
     showToast('Signed out - your data stays on this device');
     return { pending: false };
@@ -220,9 +248,18 @@ export function AppProvider({ children }) {
 
   /** Switch to another of this account's teams (replaces local data). */
   const switchTeam = React.useCallback(async (team) => {
-    await Sync.switchTeam(team);
-    reloadFromStorage();
-    showToast(`Now working with ${team.name}`);
+    if (switchingRef.current || team.id === Sync.currentTeam?.id) return;
+    switchingRef.current = true;
+    setSwitchingTeam(team);
+    setToasts([]);
+    try {
+      await Sync.switchTeam(team);
+      // The remote-applied event hydrates data and identity together.
+      showToast(`Now working with ${team.name}`);
+    } finally {
+      switchingRef.current = false;
+      setSwitchingTeam(null);
+    }
   }, [reloadFromStorage, showToast]);
 
   const resetPassword = React.useCallback(async (email) => {
@@ -253,7 +290,6 @@ export function AppProvider({ children }) {
       return;
     }
     await Sync.syncNow();
-    reloadFromStorage();
     showToast(Sync.status === 'conflict' ? 'Sync conflict: review Account & Sync' : 'Everything synced', Sync.status === 'conflict' ? 'error' : 'success');
   }, [reloadFromStorage, runInitialSync, showToast, user]);
 
@@ -268,6 +304,9 @@ export function AppProvider({ children }) {
     setGames,
     commitData,
     remoteVersion,
+    signedOutVersion,
+    activeTeam,
+    switchingTeam,
     defaultBattingOrder,
     setDefaultBattingOrder,
     showToast,
@@ -286,7 +325,7 @@ export function AppProvider({ children }) {
 
   return (
     <AppContext.Provider value={value}>
-      {children}
+      <div inert={accountConflict ? '' : undefined}>{children}</div>
       <div className="toast-stack" aria-live="polite">
         {toasts.map(t => (
           <div key={t.id} className={`toast toast-${t.type}`}>
@@ -297,25 +336,20 @@ export function AppProvider({ children }) {
 
       {accountConflict && (
         <Modal
-          title="This Device Holds Another Team's Data"
-          onClose={() => resolveAccountConflict('signOut')}
+          title="Open a Different Account"
+          onClose={() => {}}
+          dismissible={false}
         >
-          <p style={{ marginBottom: '12px' }}>
-            The data on this device belongs to a different account
-            (team "{accountConflict.owner.teamName || 'My Team'}"). To protect both
-            coaches' data, it will not be uploaded to your account.
-          </p>
-          <p className="text-muted text-small" style={{ marginBottom: '16px' }}>
-            "Use My Account" replaces the data on this device with your own
-            account's team data. A recovery copy will be retained on this device, including unsynced changes. Download a backup first if you need a portable copy.
-          </p>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => resolveAccountConflict('signOut')}>
-              Sign Out
+          <p className="mb-md">You are signed in as <strong>{accountConflict.user.email}</strong>.</p>
+          <p className="mb-md">This device still holds <strong>{accountConflict.owner.teamName || 'My Team'}</strong> from another account. Sync is paused until you choose what to open.</p>
+          <p className="text-small mb-md">Open This Account loads only this account's teams. The saved team and any unsynced edits are kept in a recovery copy for the previous account; nothing is transferred between accounts.</p>
+          <p className="text-small mb-md">Sign Out leaves the saved team on this device and returns to sign-in. It does not sign you back into the previous account.</p>
+          {accountTransitionError && <p role="alert" className="text-danger mb-md">{accountTransitionError}</p>}
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button className="btn btn-primary" disabled={accountTransitionBusy} onClick={() => resolveAccountConflict('replace')}>
+              {accountTransitionBusy ? 'Please wait…' : 'Open This Account'}
             </button>
-            <button className="btn btn-primary" style={{ flex: 1 }} onClick={() => resolveAccountConflict('replace')}>
-              Use My Account
-            </button>
+            <button className="btn btn-secondary" disabled={accountTransitionBusy} onClick={() => resolveAccountConflict('signOut')}>Sign Out</button>
           </div>
         </Modal>
       )}

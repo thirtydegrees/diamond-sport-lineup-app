@@ -1912,3 +1912,23 @@ body {
   opacity: 0.45;
   border: 1px dashed var(--warning);
 }
+
+/* Stabilization: identity and local transitions */
+.nav-brand { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.active-team { display: flex; gap: 6px; align-items: baseline; font-size: 13px; min-width: 0; }
+.active-team strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.active-team-label { color: var(--text-secondary); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.team-transition { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; background: var(--bg-primary); font-weight: 600; }
+.team-setup-controls { display: flex; flex-direction: column; gap: 12px; margin-top: 16px; }
+.team-setup-controls .form-label, .team-setup-controls p { margin: 0; }
+.team-setup-controls .btn { align-self: flex-start; }
+.lineup-screen { overflow-anchor: none; }
+.live-score { display: grid; gap: 12px; margin-bottom: 20px; }
+.live-score-row { display: flex; align-items: center; gap: 12px; }
+.live-score-row strong { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.live-score-total { font-size: 24px; font-weight: 700; min-width: 28px; text-align: center; }
+.live-score-row .btn { min-height: 44px; }
+.score-correction { display: grid; gap: 12px; margin-top: 12px; }
+.score-correction label { display: grid; gap: 6px; }
+
+.account-sign-out { flex: 0 0 auto !important; min-height: 44px; white-space: nowrap; }

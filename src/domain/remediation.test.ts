@@ -1,3 +1,4 @@
+import { updateInningRuns } from './games';
 import { describe, it, expect } from 'vitest';
 import { PITCH_RULE_PRESETS } from './presets';
 import { assessPitcherRest, assessPitcherAssignment } from './pitching';
@@ -136,4 +137,24 @@ it('rejects nonadjacent pitcher/catcher assignments in a baseball plan', () => {
       9,
     ),
   ).toBe(false);
+});
+
+
+describe('inning scoring', () => {
+  it('adds rapid runs to the latest total and preserves all unrelated game state', () => {
+    const original = makeGame();
+    const first = updateInningRuns(original, 'us', 1, 1, true);
+    const second = updateInningRuns(first, 'us', 1, 1, true);
+    const extra = updateInningRuns(second, 'them', 10, 3);
+    const corrected = updateInningRuns(extra, 'us', 1, -1, true);
+    expect(corrected.score).toEqual({us:{1:1},them:{10:3}});
+    expect(corrected.outs).toBe(original.outs);
+    expect(corrected.pitchCounts).toBe(original.pitchCounts);
+    expect(original.score).toEqual({us:{},them:{}});
+  });
+  it('rejects invalid inning totals', () => {
+    expect(() => updateInningRuns(makeGame(), 'us', 1, -1, true)).toThrow();
+    expect(() => updateInningRuns(makeGame(), 'us', 0, 1)).toThrow();
+    expect(() => updateInningRuns(makeGame(), 'us', 1, 1.5)).toThrow();
+  });
 });

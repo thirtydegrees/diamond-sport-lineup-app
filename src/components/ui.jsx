@@ -8,24 +8,24 @@ import { getPositionColorClass } from '../domain/constants';
 // ============================================
 // Modal Component
 // ============================================
-export function Modal({ title, children, onClose, footer }) {
+export function Modal({ title, children, onClose, footer, dismissible = true }) {
   // Close on escape key
   React.useEffect(() => {
     const handleEscape = (e) => {
-      if (e.key === 'Escape') onClose();
+      if (dismissible && e.key === 'Escape') onClose();
     };
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [onClose]);
+  }, [onClose, dismissible]);
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={dismissible ? onClose : undefined}>
       <div className="modal" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
           <h3 className="modal-title">{title}</h3>
-          <button className="modal-close" onClick={onClose} aria-label="Close">
+          {dismissible && <button className="modal-close" onClick={onClose} aria-label="Close">
             ×
-          </button>
+          </button>}
         </div>
         <div className="modal-body">
           {children}

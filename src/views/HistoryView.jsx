@@ -1,3 +1,4 @@
+import { isOutsideWorkload } from '../domain/games';
 /* ============================================
    Diamond Lineup - Game History View
 
@@ -138,7 +139,7 @@ function PitchCountRow({ game, playerId, playerName, onCorrect }) {
       <div style={{ flex: 1 }}>
         <strong className="text-small">{playerName(playerId)}</strong>
         <span className="text-muted text-small" style={{ marginLeft: '8px' }}>
-          {outs > 0 ? `${formatOutsAsInnings(outs)} inn pitched` : 'no pitching outs'}
+          {isOutsideWorkload(game) ? 'Outside pitching' : outs > 0 ? `${formatOutsAsInnings(outs)} inn pitched` : 'no pitching outs'}
         </span>
       </div>
       {editing ? (
@@ -343,6 +344,7 @@ function GameDetail({ game, playerName, onDelete, onCorrectPitches, onUpdateGame
         </p>
       )}
 
+      {!isOutsideWorkload(game) && <>
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
         <span className="text-muted text-small" style={{ flex: 1 }}>Actual playing time</span>
         {(
@@ -357,7 +359,9 @@ function GameDetail({ game, playerName, onDelete, onCorrectPitches, onUpdateGame
         <ParticipationSummary game={game} playerName={playerName} />
       )}
 
-      <label className="text-small">Add a missed pitcher (including zero outs)<select className="form-select" value="" onChange={e=>{if(e.target.value)onCorrectPitches(e.target.value,null);}}><option value="">Choose player</option>{game.battingOrder.filter(id=>!pitcherIds.has(id)).map(id=><option key={id} value={id}>{playerName(id)}</option>)}</select></label>
+      </>}
+      {isOutsideWorkload(game) && <p className="text-small">Outside pitching · {game.workloadSource}. Counts toward pitching workload and rest, without recording a team game or defensive participation.</p>}
+      {!isOutsideWorkload(game) && <label className="text-small">Add a missed pitcher (including zero outs)<select className="form-select" value="" onChange={e=>{if(e.target.value)onCorrectPitches(e.target.value,null);}}><option value="">Choose player</option>{game.battingOrder.filter(id=>!pitcherIds.has(id)).map(id=><option key={id} value={id}>{playerName(id)}</option>)}</select></label>}
       {pitcherIds.size > 0 && (
         <div style={{ marginTop: 'var(--space-md)' }}>
           <div className="text-muted text-small" style={{ marginBottom: '4px' }}>
@@ -375,14 +379,14 @@ function GameDetail({ game, playerName, onDelete, onCorrectPitches, onUpdateGame
         </div>
       )}
 
-      <div style={{ marginTop: 'var(--space-md)' }}>
+      {!isOutsideWorkload(game) && <div style={{ marginTop: 'var(--space-md)' }}>
         <div className="text-muted text-small" style={{ marginBottom: '4px' }}>Planned lineup</div>
         <GameLineupSnapshot game={game} playerName={playerName} />
-      </div>
+      </div>}
 
       <div style={{ marginTop: 'var(--space-md)' }}>
         <button className="btn btn-sm btn-danger" onClick={onDelete}>
-          🗑️ Delete Game
+          🗑️ {isOutsideWorkload(game) ? 'Delete Workload' : 'Delete Game'}
         </button>
       </div>
     </div>
@@ -400,14 +404,14 @@ export function HistoryView() {
     roster.find(p => p.id === id)?.name || game.playerNames?.[id] || '(removed)';
 
   const handleDelete = () => {
-    setGames(games.filter(g => g.id !== deleteTarget.id));
+    if (!setGames(current => current.filter(g => g.id !== deleteTarget.id))) return;
     setExpandedId(null);
-    showToast('Game deleted - its workload and stats are gone with it');
+    showToast(isOutsideWorkload(deleteTarget) ? 'Outside workload deleted' : 'Game deleted - its workload and stats are gone with it');
     setDeleteTarget(null);
   };
 
   const handleCorrectPitches = (gameId) => (playerId, pitches) => {
-    setGames(games.map(g => (g.id === gameId ? correctConfirmedPitches(g, playerId, pitches) : g)));
+    if (!setGames(current => current.map(g => (g.id === gameId ? correctConfirmedPitches(g, playerId, pitches) : g)))) return;
     showToast('Pitch count corrected - eligibility now uses the new total');
   };
 
@@ -419,7 +423,7 @@ export function HistoryView() {
     <div>
       <div className="card">
         <div className="card-header">
-          <div className="card-title">Past Games</div>
+          <div className="card-title">Game & Workload History</div>
         </div>
         <div className="card-body no-padding">
           {sortedGames.length === 0 ? (
@@ -444,7 +448,7 @@ export function HistoryView() {
                   >
                     <div className="player-info">
                       <div className="player-name">
-                        {g.opponent ? `vs ${g.opponent}` : 'Game'}
+                        {isOutsideWorkload(g) ? `Outside pitching · ${g.workloadSource}` : g.opponent ? `vs ${g.opponent}` : 'Game'}
                         <span style={{ marginLeft: '8px', fontSize: '12px', color: 'var(--text-tertiary)' }}>
                           {isExpanded ? '▼' : '▶'}
                         </span>
@@ -456,10 +460,11 @@ export function HistoryView() {
                       </div>
                       <div className="text-muted text-small">
                         {formatDateDisplay(g.date)}
+                        {isOutsideWorkload(g) && ` · ${(g.pitchingAppearances || g.battingOrder).map(makePlayerName(g)).join(', ')}`}
                         {g.participationQuality === 'estimated' ? ' · estimated' : ''}
                       </div>
                     </div>
-                    <div style={{ textAlign: 'right' }}>
+                    {!isOutsideWorkload(g) && <div style={{ textAlign: 'right' }}>
                       <div style={{ fontWeight: 600 }}>{usScore} - {themScore}</div>
                       <div
                         className="text-small"
@@ -471,7 +476,7 @@ export function HistoryView() {
                       >
                         {result}
                       </div>
-                    </div>
+                    </div>}
                   </div>
 
                   {isExpanded && (
@@ -492,8 +497,8 @@ export function HistoryView() {
 
       {deleteTarget && (
         <ConfirmDialog
-          title="Delete Game"
-          message={`Delete the ${formatDateDisplay(deleteTarget.date)} game${deleteTarget.opponent ? ` vs ${deleteTarget.opponent}` : ''}? Its playing time and pitching workload disappear from season stats and rest eligibility.`}
+          title={isOutsideWorkload(deleteTarget) ? 'Delete Outside Workload' : 'Delete Game'}
+          message={isOutsideWorkload(deleteTarget) ? `Delete the outside pitching workload from ${formatDateDisplay(deleteTarget.date)}? It will no longer count toward pitching workload or rest eligibility.` : `Delete the ${formatDateDisplay(deleteTarget.date)} game${deleteTarget.opponent ? ` vs ${deleteTarget.opponent}` : ''}? Its playing time and pitching workload disappear from season stats and rest eligibility.`}
           confirmLabel="Delete"
           danger
           onConfirm={handleDelete}

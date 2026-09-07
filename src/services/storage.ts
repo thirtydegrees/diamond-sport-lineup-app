@@ -1,3 +1,4 @@
+import { isOutsideWorkload } from '../domain/games';
 /* ============================================
    Diamond Lineup - Storage Service
 
@@ -197,7 +198,7 @@ export const Storage = {
 
   /** Most recent completed game (for "use last game's lineup"). */
   getLastGame(): Game | null {
-    const games = this.getGames();
+    const games = this.getGames().filter(g => g.status === 'completed' && !isOutsideWorkload(g));
     if (games.length === 0) return null;
     const sorted = [...games].sort((a, b) => compareDatesDesc(a.date, b.date));
     return sorted[0];

@@ -60,6 +60,8 @@ await page.fill('input[placeholder="Team name (optional)"]', 'Test Tigers');
 await page.click('text=Continue to Lineup');
 await page.waitForSelector('text=Start Lineup');
 await page.click('text=Auto-Generate');
+await page.waitForTimeout(100);
+(await page.evaluate(() => window.scrollY)) < 100 ? ok('generation returns to top context') : fail('generation jumped down');
 await page.waitForSelector('.lineup-grid');
 
 // 4. Verify the grid is fully filled: 12 players x 6 innings = 72 cells with positions
@@ -117,6 +119,16 @@ inn1Pitcher.includes('Inn 1') ? ok(`pitcher assigned for inning 1 (${inn1Pitcher
 await page.click('button:has-text("Start Game")');
 await page.waitForSelector('.live-panel');
 ok('Start Game enters live out tracking');
+await page.getByRole('button', {name:'Add run for Our Team',exact:true}).click();
+await page.getByRole('button', {name:'Add run for Our Team',exact:true}).click();
+await page.getByRole('button', {name:'Add run for Test Tigers',exact:true}).click();
+(await page.locator('[aria-label="Our Team total runs"]').textContent()) === '2' ? ok('live runs accumulate') : fail('live runs lost');
+await page.getByText('Correct inning scores',{exact:true}).click();
+await page.getByRole('button',{name:'Remove run for Our Team',exact:true}).click();
+const score = await page.evaluate(() => JSON.parse(localStorage.getItem('ybl_state_v3')).currentGame.score);
+score.us[1] === 1 && score.them[1] === 1 ? ok('live corrections persist per inning') : fail('score persistence mismatch');
+(await page.getByText('← Back to Setup',{exact:true}).count()) === 0 ? ok('live scoring stays in the game') : fail('live setup exit present');
+
 
 // The plan alone must not create any history: completion list comes later.
 // Working pitch count for the inning-1 pitcher
@@ -222,7 +234,7 @@ await page.click('button:has-text("I understand - no count")');
 await page.click('.modal-footer button:has-text("✓ Complete Game")');
 
 // Completion lands on History
-await page.waitForSelector('.card-title:has-text("Past Games")');
+await page.waitForSelector('.card-title:has-text("Game & Workload History")');
 ok('game completed and app navigated to History');
 
 // ============================================
@@ -574,6 +586,8 @@ stickyPos === 'sticky' ? ok('player column is sticky on mobile') : fail(`player-
 // Start the game on mobile: live panel + one-thumb out recording
 await mpage.click('button:has-text("Start Game")');
 await mpage.waitForSelector('.live-panel');
+await mpage.evaluate(() => window.scrollTo(0,0));
+await mpage.screenshot({path:join(ARTIFACTS,'stabilization-live-mobile.png')});
 await mpage.locator('button:has-text("Record Defensive Out")').tap();
 const mDots = await mpage.locator('.out-dot.filled').count();
 mDots === 1 ? ok('mobile: Record Out works with a tap') : fail(`mobile out dots: ${mDots}`);
@@ -604,6 +618,8 @@ await secondTab.goto(baseURL);
 await secondTab.waitForSelector('text=Another tab may be editing');
 (await secondTab.locator('.nav-title').count())===0 ? ok('second tab cannot edit the shared dataset') : fail('second tab mounted a writer');
 await secondTab.close();
+await (await import('./stabilization-e2e.mjs')).checkTeamTransitions(browser, baseURL);
+await (await import('./verification-e2e.mjs')).checkVerificationTransition(browser, baseURL);
 await browser.close();
 server?.kill();
 console.log(process.exitCode ? 'E2E FAILED' : 'E2E PASSED');

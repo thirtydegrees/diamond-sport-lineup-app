@@ -16,6 +16,8 @@
    ============================================ */
 
 import React from 'react';
+import { LiveScore } from '../components/LiveScore';
+import { updateInningRuns } from '../domain/games';
 import { getFieldingPositions } from '../domain/constants';
 import { formatDateLong } from '../domain/dates';
 import {
@@ -61,7 +63,7 @@ import { LineupGrid, LineupStats } from '../components/LineupGrid';
 import { Alert, ConfirmDialog, Modal, OptionItem, OptionList } from '../components/ui';
 
 export function LineupView({ onBack, onGameCompleted }) {
-  const { roster, settings, game, setGame, games, setGames, commitData, showToast } = React.useContext(AppContext);
+  const { roster, settings, game, setGame, games, setGames, commitData, showToast, activeTeam } = React.useContext(AppContext);
 
   const [error, setError] = React.useState(null);
   const [warnings, setWarnings] = React.useState(null);
@@ -193,6 +195,7 @@ export function LineupView({ onBack, onGameCompleted }) {
   }, [showStartChoice, startedBlank]);
 
   const handleStartChoice = (choice) => {
+    requestAnimationFrame(() => window.scrollTo({top: 0, behavior: 'instant'}));
     setShowStartChoice(false);
     if (choice === 'populated') {
       generateLineup(1);
@@ -539,10 +542,8 @@ export function LineupView({ onBack, onGameCompleted }) {
     }
   };
 
-  const handleScoreChange = (team, inning, value) => {
-    const newScore = { ...game.score };
-    newScore[team] = { ...(newScore[team] || {}), [inning]: value };
-    setGame({ ...game, score: newScore });
+  const handleScoreChange = (side, inning, value, delta = false) => {
+    setGame(current => current?.id === game.id ? updateInningRuns(current, side, inning, value, delta) : current);
   };
 
   const handleAddInning = () => {
@@ -607,7 +608,7 @@ export function LineupView({ onBack, onGameCompleted }) {
   const pastLastInning = live && live.inning > game.innings;
 
   return (
-    <div>
+    <div className="lineup-screen">
       {/* Print Header */}
       <div className="print-header">
         <h1>{isSoftball ? '🥎' : '⚾'} {game.opponent ? `vs ${game.opponent}` : 'Game Lineup'}</h1>
@@ -650,6 +651,7 @@ export function LineupView({ onBack, onGameCompleted }) {
             </div>
           </div>
           <div className="card-body">
+            <LiveScore game={game} teamName={activeTeam?.teamName || 'Our Team'} onChange={handleScoreChange} />
             {/* Current defense */}
             <div className="live-formation">
               {fieldingPositions.map(pos => {
@@ -815,9 +817,9 @@ export function LineupView({ onBack, onGameCompleted }) {
         </div>
       </div>
 
-      <button className="btn btn-ghost btn-block no-print" onClick={onBack}>
+      {!isLive && <button className="btn btn-ghost btn-block no-print" onClick={onBack}>
         ← Back to Setup
-      </button>
+      </button>}
 
       {confirmAction && <ConfirmDialog title={confirmAction.title} message={confirmAction.message} confirmLabel="Confirm" onConfirm={() => { confirmAction.apply(); setConfirmAction(null); }} onCancel={() => setConfirmAction(null)} />}
       {/* Modals */}

@@ -1,4 +1,4 @@
-import { Sync, getDataOwner } from '../services/sync';
+import { AppContext } from '../state/AppContext';
 /* ============================================
    Diamond Lineup - Lineup Grid Component
    ============================================ */
@@ -14,6 +14,7 @@ export function LineupGrid({
   onCellClick,
   onScoreChange
 }) {
+  const { activeTeam } = React.useContext(AppContext);
   const [scoreEdit, setScoreEdit] = React.useState(null);
 
   const innings = Math.max(game?.innings || 7, game?.live?.inning || 1, ...Object.keys(game?.score?.us || {}).map(Number), ...Object.keys(game?.score?.them || {}).map(Number));
@@ -178,7 +179,7 @@ export function LineupGrid({
 
       {/* Score Section */}
       <div className="score-section">
-        {renderScoreRow('us', Sync.currentTeam?.name || getDataOwner()?.teamName || 'Our Team', usTotal)}
+        {renderScoreRow('us', activeTeam?.teamName || 'Our Team', usTotal)}
         {renderScoreRow('them', game.opponent || 'Opponent', themTotal)}
       </div>
     </div>
