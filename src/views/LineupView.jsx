@@ -17,7 +17,7 @@
 
 import React from 'react';
 import { LiveScore } from '../components/LiveScore';
-import { updateInningRuns } from '../domain/games';
+import { updateInningRuns, firstSolvableInning } from '../domain/games';
 import { getFieldingPositions } from '../domain/constants';
 import { formatDateLong } from '../domain/dates';
 import {
@@ -132,6 +132,7 @@ export function LineupView({ onBack, onGameCompleted }) {
    */
   const runSolver = React.useCallback((baseGame, fromInning = 1, opts = {}) => {
     if (!baseGame) return;
+    fromInning = firstSolvableInning(baseGame, fromInning);
 
     setError(null);
     setWarnings(null);
@@ -177,7 +178,7 @@ export function LineupView({ onBack, onGameCompleted }) {
       setGame(baseGame);
       setError({ message: result.error, conflicts: result.conflicts });
     }
-  }, [avoidOverrides, sitOverrides, getActivePlayers, innings, settings, isSoftball, setGame]);
+  }, [avoidOverrides, sitOverrides, getActivePlayers, innings, settings, isSoftball, games, pitchRules, setGame]);
 
   const generateLineup = React.useCallback((fromInning = 1, opts = {}) => {
     runSolver(game, fromInning, opts);
@@ -548,7 +549,7 @@ export function LineupView({ onBack, onGameCompleted }) {
 
   const handleAddInning = () => {
     const newInnings = (game?.innings || settings.innings) + 1;
-    runSolver({ ...game, innings: newInnings }, newInnings);
+    setConfirmAction({ title: 'Add Inning', message: `Extend this game to ${newInnings} innings? Existing innings and recorded play will be preserved.`, apply: guarded(game, () => runSolver({ ...game, innings: newInnings }, newInnings)) });
   };
 
   const handleAvoidOverride = (override) => {
@@ -568,6 +569,7 @@ export function LineupView({ onBack, onGameCompleted }) {
   };
 
   const handleClearAndResolve = () => {
+    if (isLive) return;
     const newLineup = {};
     const lockedCells = game.lockedCells || {};
     const exitedPlayers = game.exitedPlayers || {};
@@ -651,36 +653,6 @@ export function LineupView({ onBack, onGameCompleted }) {
             </div>
           </div>
           <div className="card-body">
-            <LiveScore game={game} teamName={activeTeam?.teamName || 'Our Team'} onChange={handleScoreChange} />
-            {/* Current defense */}
-            <div className="live-formation">
-              {fieldingPositions.map(pos => {
-                const holderId = Object.keys(live.assignments).find(id => live.assignments[id] === pos);
-                return (
-                  <button
-                    key={pos}
-                    className={`live-chip ${holderId ? '' : 'vacant'}`}
-                    onClick={() => setLiveSpotModal({ position: pos })}
-                  >
-                    <span className={`pos-text ${pos === 'P' ? 'P' : pos === 'C' ? 'C' : ''}`}>{pos}</span>
-                    <span className="live-chip-name">
-                      {holderId ? playerName(holderId).split(' ')[0] : '—'}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-            {benchIds.length > 0 && (
-              <div className="live-bench">
-                <span className="text-muted text-small">Bench:</span>
-                {benchIds.map(id => (
-                  <button key={id} className="live-chip bench" onClick={() => setBenchMoveModal({ playerId: id })}>
-                    {playerName(id).split(' ')[0]}
-                  </button>
-                ))}
-              </div>
-            )}
-
             <button
               className="btn btn-primary btn-block btn-lg"
               style={{ marginTop: 'var(--space-md)' }}
@@ -712,18 +684,38 @@ export function LineupView({ onBack, onGameCompleted }) {
               >
                 ⚾ Pitches{livePitcherId ? ` - ${playerName(livePitcherId).split(' ')[0]} (${getPitchCountEntry(game, livePitcherId).live})` : ''}
               </button>
-              <button
-                className={`btn ${pastLastInning ? 'btn-primary' : 'btn-secondary'}`}
-                style={{ flex: 1 }}
-                onClick={() => setCompleteModal(true)}
-              >
-                🏁 Complete Game
-              </button>
             </div>
-            <p className="form-hint" style={{ textAlign: 'center' }}>
-              Tap a position to make a mid-inning change - recorded outs are never rewritten.
-              A shortened game can be completed at any point.
-            </p>
+            {/* Current defense */}
+            <div className="live-formation">
+              {fieldingPositions.map(pos => {
+                const holderId = Object.keys(live.assignments).find(id => live.assignments[id] === pos);
+                return (
+                  <button
+                    key={pos}
+                    className={`live-chip ${holderId ? '' : 'vacant'}`}
+                    onClick={() => setLiveSpotModal({ position: pos })}
+                  >
+                    <span className={`pos-text ${pos === 'P' ? 'P' : pos === 'C' ? 'C' : ''}`}>{pos}</span>
+                    <span className="live-chip-name">
+                      {holderId ? playerName(holderId).split(' ')[0] : '—'}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            {benchIds.length > 0 && (
+              <div className="live-bench">
+                <span className="text-muted text-small">Bench:</span>
+                {benchIds.map(id => (
+                  <button key={id} className="live-chip bench" onClick={() => setBenchMoveModal({ playerId: id })}>
+                    {playerName(id).split(' ')[0]}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <p className="form-hint">Tap a position to change the current defense. Recorded outs are preserved.</p>
+            <LiveScore game={game} teamName={activeTeam?.teamName || 'Our Team'} onChange={handleScoreChange} />
           </div>
         </div>
       )}
@@ -755,7 +747,7 @@ export function LineupView({ onBack, onGameCompleted }) {
         <div className="card-header">
           <div>
             <div className="card-title">Planned Pitchers</div>
-            <div className="card-subtitle">Tap an inning to assign</div>
+            <div className="card-subtitle">{isLive ? "Tap a future inning to assign; change the current pitcher above" : "Tap an inning to assign"}</div>
           </div>
         </div>
         <div className="card-body" style={{ padding: 'var(--space-md)' }}>
@@ -768,6 +760,7 @@ export function LineupView({ onBack, onGameCompleted }) {
                   key={inning}
                   className={`btn ${pitcherId ? 'btn-primary' : 'btn-secondary'}`}
                   style={{ minWidth: '75px', flexDirection: 'column', height: 'auto', padding: 'var(--space-sm)', gap: '2px' }}
+                  disabled={isLive && inning <= live.inning}
                   onClick={() => setPitcherModal(inning)}
                 >
                   <span style={{ fontSize: '11px', opacity: 0.8 }}>Inn {inning}</span>
@@ -804,18 +797,22 @@ export function LineupView({ onBack, onGameCompleted }) {
       <div className="card no-print">
         <div className="card-body">
           <div style={{ display: 'flex', gap: 'var(--space-sm)', flexWrap: 'wrap' }}>
-            <button className="btn btn-primary" onClick={() => generateLineup(1)}>
-              Fill / Re-solve
+            <button className="btn btn-primary" disabled={isLive && live.inning >= game.innings} onClick={() => isLive ? setConfirmAction({ title: 'Re-solve Future Innings', message: `Rebuild unlocked assignments from inning ${live.inning + 1}? Current defense and played innings will stay unchanged.`, apply: guarded(game, () => generateLineup(1)) }) : generateLineup(1)}>
+              {isLive ? 'Re-solve Future Innings' : 'Fill / Re-solve'}
             </button>
-            <button className="btn btn-secondary" onClick={handleClearAndResolve}>
+            {isLive && <button className="btn btn-primary btn-block btn-lg no-print" onClick={() => setCompleteModal(true)}>🏁 Complete Game</button>}
+
+      {!isLive && <button className="btn btn-secondary" onClick={handleClearAndResolve}>
               Clear & Re-solve
-            </button>
+            </button>}
             <button className="btn btn-secondary" onClick={handleAddInning}>
               + Add Inning
             </button>
           </div>
         </div>
       </div>
+
+      {isLive && <button className="btn btn-primary btn-block btn-lg no-print" onClick={() => setCompleteModal(true)}>🏁 Complete Game</button>}
 
       {!isLive && <button className="btn btn-ghost btn-block no-print" onClick={onBack}>
         ← Back to Setup

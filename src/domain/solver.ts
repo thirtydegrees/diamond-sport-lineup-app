@@ -263,7 +263,7 @@ export const Solver = {
 
     // Copy locked cells and existing assignments for innings before startInning
     for (const [key, pos] of Object.entries(lockedCells)) {
-      solution[key] = pos;
+      if (Number(key.slice(key.lastIndexOf('-') + 1)) >= startInning) solution[key] = pos;
     }
     for (const [key, pos] of Object.entries(existingPlan)) {
       const inn = parseInt(key.slice(key.lastIndexOf('-') + 1), 10);

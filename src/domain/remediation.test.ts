@@ -1,4 +1,4 @@
-import { updateInningRuns } from './games';
+import { updateInningRuns, firstSolvableInning } from './games';
 import { describe, it, expect } from 'vitest';
 import { PITCH_RULE_PRESETS } from './presets';
 import { assessPitcherRest, assessPitcherAssignment } from './pitching';
@@ -156,5 +156,22 @@ describe('inning scoring', () => {
     expect(() => updateInningRuns(makeGame(), 'us', 1, -1, true)).toThrow();
     expect(() => updateInningRuns(makeGame(), 'us', 0, 1)).toThrow();
     expect(() => updateInningRuns(makeGame(), 'us', 1, 1.5)).toThrow();
+  });
+});
+
+
+describe('live automated planning boundary', () => {
+  it('preserves played and current innings, including holes and exited players', () => {
+    const game = makeGame({status: 'live', live: {inning: 3, outsRecorded: 1, assignments: {a: 'P'}}, lineup: {'a-1': 'P', 'departed-2': 'SIT', 'a-3': 'P'}});
+    const result = Solver.solve({players: [makePlayer('a')], innings: 4, startInning: firstSolvableInning(game), existingPlan: game.lineup, lockedCells: {'ghost-1': 'C'}, fieldingPositions: ['P'], requireContiguousPitching: false});
+    expect(result.success).toBe(true);
+    expect(result.solution).toEqual({...game.lineup, 'a-4': 'P'});
+    expect(game.live?.inning).toBe(3);
+  });
+  it('keeps explicit later starts and draft first-inning solving', () => {
+    expect(firstSolvableInning(makeGame())).toBe(1);
+    const game = makeGame({status:'live', live:{inning:3, outsRecorded:0, assignments:{}}});
+    expect(firstSolvableInning(game, 1)).toBe(4);
+    expect(firstSolvableInning(game, 7)).toBe(7);
   });
 });

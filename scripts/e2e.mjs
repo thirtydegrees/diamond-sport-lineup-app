@@ -184,15 +184,49 @@ dotsAfterUndo === 2 ? ok('Undo Out restores inning 1 with 2 outs') : fail(`after
 await page.click('button:has-text("Record Defensive Out")');
 await page.waitForSelector('.live-panel:has-text("Inning 2 of 6")');
 
-// One-tap End Inning records the remaining 3 outs of inning 2
+// A historical correction selection must reset when the active inning advances.
+await page.getByLabel('Scoring inning').selectOption('1');
+// Confirm End Inning records the remaining 3 outs of inning 2
 await page.click('button:has-text("End Inning (3 outs)")');
 await page.getByRole('button',{name:'Confirm',exact:true}).click();
 await page.waitForSelector('.live-panel:has-text("Inning 3 of 6")');
-ok('End Inning records the rest of the inning in one tap');
+ok('End Inning records the rest of the inning after confirmation');
+(await page.getByLabel('Scoring inning').inputValue()) === 'current' ? ok('correction selection follows inning advancement') : fail('correction selection stayed stale');
 
 // Grid highlights the live inning
 const currentHdr = (await page.textContent('.lineup-cell.header.current')).trim();
 currentHdr === '3' ? ok('plan grid highlights the live inning (3)') : fail(`current inning header: ${currentHdr}`);
+
+// Live safety: active scoring never inherits the historical correction selection.
+await page.getByLabel('Scoring inning').selectOption('1');
+await page.getByRole('button', {name:'Add run for Our Team', exact:true}).click();
+const activeScore = await page.evaluate(() => JSON.parse(localStorage.getItem('ybl_state_v3')).currentGame.score);
+activeScore.us[3] === 1 && activeScore.us[1] === 1 ? ok('quick scoring follows active inning despite historical correction') : fail('quick score targeted historical inning');
+const beforeResolve = await page.evaluate(() => JSON.parse(localStorage.getItem('ybl_state_v3')).currentGame);
+(await page.getByText('Clear & Re-solve', {exact:true}).count()) === 0 ? ok('destructive clear absent while live') : fail('live clear remains');
+await page.getByRole('button', {name:'Re-solve Future Innings', exact:true}).click();
+await page.getByRole('button', {name:'Confirm',exact:true}).click();
+const afterResolve = await page.evaluate(() => JSON.parse(localStorage.getItem('ybl_state_v3')).currentGame);
+const historyPlan = g => Object.fromEntries(Object.entries(g.lineup).filter(([key]) => Number(key.slice(key.lastIndexOf('-')+1)) <= 3));
+JSON.stringify(historyPlan(beforeResolve)) === JSON.stringify(historyPlan(afterResolve)) && JSON.stringify(beforeResolve.live) === JSON.stringify(afterResolve.live) && JSON.stringify(beforeResolve.outs) === JSON.stringify(afterResolve.outs) && JSON.stringify(beforeResolve.pitchCounts) === JSON.stringify(afterResolve.pitchCounts) ? ok('live resolve preserves current and historical state') : fail('resolve changed played state');
+await page.getByRole('button', {name:'+ Add Inning', exact:true}).click();
+await page.getByRole('button', {name:'Cancel',exact:true}).click();
+(await page.evaluate(() => JSON.parse(localStorage.getItem('ybl_state_v3')).currentGame.innings)) === 6 ? ok('cancel Add Inning preserves structure') : fail('cancel added inning');
+await page.getByRole('button', {name:'+ Add Inning', exact:true}).click();
+await page.getByRole('button', {name:'Confirm',exact:true}).click();
+(await page.evaluate(() => JSON.parse(localStorage.getItem('ybl_state_v3')).currentGame.innings)) === 7 ? ok('confirmed Add Inning extends game') : fail('confirmed inning missing');
+await page.setViewportSize({width:390,height:844});
+const layoutSafe = await page.evaluate(() => {
+ const top = selector => document.querySelector(selector).getBoundingClientRect().top;
+ const buttons = [...document.querySelectorAll('button')];
+ const out = buttons.find(b=>b.textContent.includes('Record Defensive Out')).getBoundingClientRect().top;
+ const pitch = buttons.find(b=>b.textContent.includes('Pitches')).getBoundingClientRect().top;
+ const complete = buttons.find(b=>b.textContent.includes('Complete Game')).getBoundingClientRect().top;
+ const cells = [...document.querySelectorAll('.score-table .score-cell')];
+ const n = cells.length / 2;
+ return out < pitch && pitch < top('.live-formation') && top('.live-formation') < top('.live-score') && complete > top('.score-table') && cells.slice(0,n).every((c,i)=>Math.abs(c.getBoundingClientRect().left-cells[i+n].getBoundingClientRect().left)<1);
+});
+layoutSafe ? ok('phone layout prioritizes defense and preserves score columns') : fail('phone layout/alignment wrong');
 
 // ============================================
 // 10. COMPLETE GAME: mandatory pitch-count confirmation

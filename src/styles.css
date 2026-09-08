@@ -1932,3 +1932,13 @@ body {
 .score-correction label { display: grid; gap: 6px; }
 
 .account-sign-out { flex: 0 0 auto !important; min-height: 44px; white-space: nowrap; }
+
+/* A single scroll surface keeps inning headings and both score rows aligned. */
+.score-section { overflow-x: auto; }
+.score-table { display: grid; width: max-content; gap: 1px; }
+.score-table .score-row, .score-table .score-cells { display: contents; }
+.score-table .score-heading { text-align: center; padding: 8px 2px; white-space: nowrap; }
+.score-table .score-label { width: auto; padding: 8px; overflow-wrap: anywhere; }
+.score-table .score-cell, .score-table .score-cell.editing { width: 100%; min-width: 0; height: 44px; margin: 0; }
+.live-panel .live-formation { margin-top: var(--space-md); }
+.live-panel .live-score { margin-top: var(--space-lg); margin-bottom: 0; }

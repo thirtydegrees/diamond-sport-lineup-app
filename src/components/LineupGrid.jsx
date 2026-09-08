@@ -178,9 +178,14 @@ export function LineupGrid({
       </div>
 
       {/* Score Section */}
-      <div className="score-section">
+      <div className="score-section" role="region" aria-label="Score by inning" tabIndex={0}>
+        <div className="score-table" style={{gridTemplateColumns: `120px ${Array.from({length: innings}, (_, i) => scoreEdit?.inning === i + 1 ? '120px' : '52px').join(' ')} 56px`}}>
+        <strong className="score-heading">Team / Inning</strong>
+        {Array.from({length: innings}, (_, i) => <strong className="score-heading" key={i}>{i + 1}</strong>)}
+        <strong className="score-heading">Total</strong>
         {renderScoreRow('us', activeTeam?.teamName || 'Our Team', usTotal)}
         {renderScoreRow('them', game.opponent || 'Opponent', themTotal)}
+        </div>
       </div>
     </div>
   );

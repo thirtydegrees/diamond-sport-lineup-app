@@ -605,3 +605,8 @@ export function updateInningRuns(game: Game, side: 'us' | 'them', inning: number
   if (!Number.isSafeInteger(value) || !Number.isSafeInteger(runs) || runs < 0) throw new Error('Runs must be a nonnegative whole number');
   return {...game, score: {...game.score, [side]: {...game.score[side], [inning]: runs}}};
 }
+
+/** Automated planning never changes the current defense or played innings. */
+export function firstSolvableInning(game: Game, requested = 1): number {
+  return Math.max(requested, game.status === 'live' && game.live ? game.live.inning + 1 : 1);
+}
