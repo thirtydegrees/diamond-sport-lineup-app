@@ -266,7 +266,7 @@ export function ConfirmDialog({ title, message, confirmLabel = 'Confirm', cancel
         </>
       }
     >
-      <p>{message}</p>
+      <p style={{whiteSpace: 'pre-line'}}>{message}</p>
     </Modal>
   );
 }

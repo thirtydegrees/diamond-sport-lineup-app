@@ -35,6 +35,8 @@ export function AppProvider({ children }) {
 
   // Account & sync
   const [user, setUser] = React.useState(null);
+  const [saveError, setSaveError] = React.useState(null);
+  const [startupReady, setStartupReady] = React.useState(false);
   const [syncStatus, setSyncStatus] = React.useState('signedOut');
   const [provisioningError, setProvisioningError] = React.useState(null);
   const initialSyncRan = React.useRef(false);
@@ -63,8 +65,8 @@ export function AppProvider({ children }) {
   const commitData = React.useCallback((patch) => {
     const next = {...dataRef.current, ...patch};
     if(patch.settings)next.settings={...patch.settings,pitchRules:normalizePitchRules(patch.settings.pitchRules)};
-    try { Sync.saveLocal(next); hydrate(next); return true; }
-    catch(e) { showToast(e.message, 'error'); return false; }
+    try { Sync.saveLocal(next); hydrate(next); setSaveError(null); return true; }
+    catch(e) { setSaveError(e.message); showToast(e.message, 'error'); return false; }
   }, [hydrate, showToast]);
   const change = (key) => (value) => commitData({[key]: typeof value === 'function' ? value(dataRef.current[key]) : value});
   const setRoster = change('roster'), setSettings = change('settings'), setGame = change('currentGame');
@@ -134,10 +136,12 @@ export function AppProvider({ children }) {
         Sync.disable(); initialSyncRan.current = false; sessionId.current = session?.user?.id || null;
       }
       setUser(session?.user ?? null);
+      if (session?.user && initialSyncRan.current) return;
       if (session?.user && !initialSyncRan.current) {
         initialSyncRan.current = true;
         await runInitialSync(session.user);
       }
+      if (!cancelled && sessionId.current === (session?.user?.id || null)) setStartupReady(true);
     };
 
     supabase.auth.getSession().then(({ data }) => {if(!authEventSeen)handleSession(data.session);});
@@ -158,6 +162,7 @@ export function AppProvider({ children }) {
         setPasswordRecovery(false);
         Sync.disable();
         setUser(null);
+        setStartupReady(true);
         setProvisioningError(null);
       } else {
         handleSession(session);
@@ -305,6 +310,8 @@ export function AppProvider({ children }) {
     commitData,
     remoteVersion,
     signedOutVersion,
+    startupReady,
+    saveError,
     activeTeam,
     switchingTeam,
     defaultBattingOrder,

@@ -120,6 +120,17 @@ export function LineupView({ onBack, onGameCompleted }) {
     [roster, game]
   );
 
+  const compactName = id => {
+    const full = playerName(id);
+    const first = full.trim().split(/\s+/)[0];
+    const duplicates = roster.filter(p => p.name.trim().split(/\s+/)[0].toLowerCase() === first.toLowerCase());
+    return duplicates.length > 1 ? full : first;
+  };
+  const [lastPitch, setLastPitch] = React.useState(null);
+  const [upcomingOpen, setUpcomingOpen] = React.useState(false);
+  const [optionsOpen, setOptionsOpen] = React.useState(false);
+  const [statsOpen, setStatsOpen] = React.useState(false);
+
   /** Central policy check for putting a player on the mound in THIS game. */
   const assessPitcher = React.useCallback(
     (player) => { const warnings = assessPositionChange(player, 'P', game, games, pitchRules, { enforcePitcherCatcherRule: !isSoftball, live: false }); return { allowed: !warnings.some(w => w.severity === 'block'), warnings }; },
@@ -231,21 +242,14 @@ export function LineupView({ onBack, onGameCompleted }) {
   const doStartGame = () => {
     setStartIssuesPrompt(null);
     const next = startLiveGame(game);
-    reviewTransition(next, () => { setGame(next); showToast('Game started'); });
+    reviewTransition(next, () => { setGame(next);  });
   };
 
   const doRecordOut = (bulk) => {
     setOutIssuesPrompt(null);
     const next = bulk ? endInningOuts(game) : recordOut(game);
     reviewTransition(next, () => { if(setGame(next))lastOutAction.current={before:game,after:next.outs}; });
-    const done = next.live;
-    if (done && done.outsRecorded === 0 && done.inning > game.live.inning) {
-      if (done.inning > next.innings) {
-        showToast('Final scheduled inning done - Complete Game when you\'re finished');
-      } else {
-        showToast(`Inning ${game.live.inning} done - defense set from inning ${done.inning} plan`);
-      }
-    }
+
   };
 
   // One acknowledgment per pitcher per game: after the coach knowingly
@@ -309,7 +313,7 @@ export function LineupView({ onBack, onGameCompleted }) {
       const player = roster.find(p=>p.id===id);
       return player ? assessPositionChange(player, pos, game, games, pitchRules, {enforcePitcherCatcherRule: !isSoftball, live:true}) : [];
     });
-    const confirm = () => setConfirmAction({title:'Confirm Position Change', message:changes.map(([id,pos])=>`${playerName(id)}: ${game.live.assignments[id] || 'unassigned'} → ${pos}`).join('. '), apply});
+    const confirm = () => setConfirmAction({title:'Confirm Position Change', message:changes.map(([id,pos])=>`${playerName(id)}: ${game.live.assignments[id] || 'unassigned'} → ${pos}`).join('\n'), apply});
     if(warnings.length) setLiveOverridePrompt({warnings,apply:guarded(game,confirm)});
     else confirm();
   };
@@ -347,10 +351,12 @@ export function LineupView({ onBack, onGameCompleted }) {
   const counterPlayer = pitchCounterFor ? roster.find(p => p.id === pitchCounterFor) : null;
 
   const handleCount = (inning, count) => {
+    setLastPitch(null);
     setGame(setInningPitches(game, pitchCounterFor, inning, count));
   };
 
   const handleSetTotal = (total) => {
+    setLastPitch(null);
     setGame(setLivePitchTotal(game, pitchCounterFor, total));
   };
 
@@ -500,7 +506,7 @@ export function LineupView({ onBack, onGameCompleted }) {
     const { game: swapped, changes } = applyPlanSwap(game, player, inning, newPosition, activePlayers);
     const planIssues = validateGamePlan(swapped);
     if (planIssues.length > 0) setWarnings(planIssues);
-    setConfirmAction({ title: 'Confirm Position Change', message: changes.map(c => `${c.playerName}: ${c.from || 'unassigned'} → ${c.to || 'unassigned'}`).join('. '), apply: guarded(game, () => setGame(swapped)) });
+    setConfirmAction({ title: 'Confirm Position Change', message: changes.map(c => `${c.playerName}: ${c.from || 'unassigned'} → ${c.to || 'unassigned'}`).join('\n'), apply: guarded(game, () => setGame(swapped)) });
   };
 
   const handleExitConfirm = (action) => {
@@ -544,8 +550,8 @@ export function LineupView({ onBack, onGameCompleted }) {
     }
   };
 
-  const handleScoreChange = (side, inning, value, delta = false) => {
-    setGame(current => current?.id === game.id && current.status === 'live' ? updateInningRuns(current, side, inning, value, delta) : current);
+  const handleScoreChange = (side, inning, value, delta = false, expected) => {
+    return setGame(current => current?.id === game.id && current.status === 'live' && (expected === undefined || (current.score[side]?.[inning] || 0) === expected) ? updateInningRuns(current, side, inning, value, delta) : current);
   };
 
   const handleAddInning = () => {
@@ -589,7 +595,10 @@ export function LineupView({ onBack, onGameCompleted }) {
     runSolver({ ...game, lineup: newLineup }, 1);
   };
 
-  const handlePrint = () => window.print();
+  const handlePrint = () => {
+    setUpcomingOpen(true); setStatsOpen(true); setOptionsOpen(true);
+    requestAnimationFrame(() => { window.print(); setUpcomingOpen(upcomingOpen); setStatsOpen(statsOpen); setOptionsOpen(optionsOpen); });
+  };
 
   if (!game) return <Alert type="error">No active game</Alert>;
 
@@ -640,10 +649,10 @@ export function LineupView({ onBack, onGameCompleted }) {
             <div>
               <div className="card-title">
                 {pastLastInning ? 'Extra Innings' : `Inning ${live.inning} of ${game.innings}`}
-                <div className="card-subtitle">{formatDateLong(game.date)}</div>
+                <div className="card-subtitle">{game.opponent ? `vs ${game.opponent} · ` : ''}{formatDateLong(game.date)}</div>
               </div>
               <div className="card-subtitle">
-                {totalOuts} out{totalOuts === 1 ? '' : 's'} recorded · {formatOutsAsInnings(totalOuts)} innings
+                {outsThisInning} out{outsThisInning === 1 ? '' : 's'} this inning
               </div>
             </div>
             <div className="out-dots" aria-label={`${outsThisInning} outs this inning`}>
@@ -661,30 +670,39 @@ export function LineupView({ onBack, onGameCompleted }) {
               ⬤ Record Defensive Out
             </button>
             <div style={{ display: 'flex', gap: 'var(--space-sm)', marginTop: 'var(--space-sm)' }}>
-              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setConfirmAction({ title: 'End Inning', message: `Record all ${remainingOuts} remaining outs with the current defense?`, apply: guarded(game, () => handleRecordOut(true)) })}>
-                End Inning ({remainingOuts} out{remainingOuts === 1 ? '' : 's'})
+              <button className="btn btn-secondary" style={{ flex: 1 }} onClick={() => setConfirmAction({ title: 'Finish Defensive Inning', message: `Record all ${remainingOuts} remaining outs with the current defense?`, apply: guarded(game, () => handleRecordOut(true)) })}>
+                Finish Defense ({remainingOuts} out{remainingOuts === 1 ? '' : 's'})
               </button>
-              <button
-                className="btn btn-secondary"
-                disabled={totalOuts === 0}
-                onClick={handleUndoOut}
-              >
-                ↩ Undo Outs
-              </button>
-            </div>
-
-            <div style={{ display: 'flex', gap: 'var(--space-sm)', marginTop: 'var(--space-sm)' }}>
               <button
                 className="btn btn-secondary"
                 style={{ flex: 1 }}
-                onClick={() => {
-                  if (livePitcherId) setPitchCounterFor(livePitcherId);
-                  else setLiveSpotModal({ position: 'P' });
-                }}
+                disabled={totalOuts === 0}
+                onClick={handleUndoOut}
               >
-                ⚾ Pitches{livePitcherId ? ` - ${playerName(livePitcherId).split(' ')[0]} (${getPitchCountEntry(game, livePitcherId).live})` : ''}
+                ↩ Undo last {lastOutAction.current && game.outs === lastOutAction.current.after && game.outs.length - lastOutAction.current.before.outs.length > 1 ? `${game.outs.length - lastOutAction.current.before.outs.length} outs` : 'out'}
               </button>
             </div>
+
+            <section className="inline-pitches" aria-label="Pitch counting">
+              <div><strong>{livePitcherId ? compactName(livePitcherId) : 'No pitcher assigned'}</strong><span className="inline-pitch-total">{livePitcherId ? getPitchCountEntry(game, livePitcherId).live : 0} <small>pitches</small></span></div>
+              <button className="btn btn-primary" disabled={!livePitcherId} onClick={() => {
+                const saved = setGame(current => {
+                  if(current?.id !== game.id || current.status !== 'live' || current.live.inning !== live.inning || current.live.assignments[livePitcherId] !== 'P') return current;
+                  const count = getPitchCountEntry(current, livePitcherId).byInning[live.inning] || 0;
+                  return setInningPitches(current, livePitcherId, live.inning, count + 1);
+                });
+                if (saved) setLastPitch({playerId: livePitcherId, inning: live.inning, total: getPitchCountEntry(game, livePitcherId).live + 1});
+              }}>+1 Pitch</button>
+              <button className="btn btn-secondary" onClick={() => livePitcherId ? setPitchCounterFor(livePitcherId) : setLiveSpotModal({position:'P'})}>Pitch Details</button>
+              <button className="btn btn-ghost" disabled={!lastPitch || lastPitch.playerId !== livePitcherId || lastPitch.inning !== live.inning || getPitchCountEntry(game, livePitcherId).live !== lastPitch.total} onClick={() => {
+                setGame(current => {
+                  if(!lastPitch || current?.id !== game.id || current.status !== 'live' || current.live.inning !== lastPitch.inning || getPitchCountEntry(current,lastPitch.playerId).live !== lastPitch.total) return current;
+                  const count = getPitchCountEntry(current,lastPitch.playerId).byInning[lastPitch.inning] || 0;
+                  return count > 0 ? setInningPitches(current,lastPitch.playerId,lastPitch.inning,count-1) : current;
+                }); setLastPitch(null);
+              }}>Undo last pitch</button>
+              {livePitcherId && pitchRules.limitType === 'pitches' && dailyPitchTotal(livePitcherId,game,games).total >= pitchRules.absoluteMax && <p className="text-small">At or above the daily pitch limit. Keep recording actual pitches.</p>}
+            </section>
             {/* Current defense */}
             <div className="live-formation">
               {fieldingPositions.map(pos => {
@@ -692,12 +710,13 @@ export function LineupView({ onBack, onGameCompleted }) {
                 return (
                   <button
                     key={pos}
+                    title={holderId ? playerName(holderId) : `Assign ${pos}`}
                     className={`live-chip ${holderId ? '' : 'vacant'}`}
                     onClick={() => setLiveSpotModal({ position: pos })}
                   >
                     <span className={`pos-text ${pos === 'P' ? 'P' : pos === 'C' ? 'C' : ''}`}>{pos}</span>
                     <span className="live-chip-name">
-                      {holderId ? playerName(holderId).split(' ')[0] : '—'}
+                      {holderId ? compactName(holderId) : '—'}
                     </span>
                   </button>
                 );
@@ -708,7 +727,7 @@ export function LineupView({ onBack, onGameCompleted }) {
                 <span className="text-muted text-small">Bench:</span>
                 {benchIds.map(id => (
                   <button key={id} className="live-chip bench" onClick={() => setBenchMoveModal({ playerId: id })}>
-                    {playerName(id).split(' ')[0]}
+                    {compactName(id)}
                   </button>
                 ))}
               </div>
@@ -737,6 +756,7 @@ export function LineupView({ onBack, onGameCompleted }) {
         </div>
       )}
 
+      <details className="planning-section" open={!isLive || statsOpen} onToggle={e=>{if(isLive)setStatsOpen(e.currentTarget.open);}}><summary>Lineup Statistics</summary>
       {/* Stats */}
       <div className="card no-print">
         <div className="card-body" style={{ padding: 'var(--space-md)' }}>
@@ -744,6 +764,8 @@ export function LineupView({ onBack, onGameCompleted }) {
         </div>
       </div>
 
+      </details>
+      <details className="planning-section" open={!isLive || upcomingOpen} onToggle={e=>{if(isLive)setUpcomingOpen(e.currentTarget.open);}}><summary>Upcoming Lineup</summary>
       {/* Pitcher plan */}
       <div className="card no-print">
         <div className="card-header">
@@ -760,14 +782,14 @@ export function LineupView({ onBack, onGameCompleted }) {
               return (
                 <button
                   key={inning}
-                  className={`btn ${pitcherId ? 'btn-primary' : 'btn-secondary'}`}
+                  className={`btn btn-secondary ${pitcherId ? 'pitcher-assigned' : ''}`}
                   style={{ minWidth: '75px', flexDirection: 'column', height: 'auto', padding: 'var(--space-sm)', gap: '2px' }}
                   disabled={isLive && inning <= live.inning}
                   onClick={() => setPitcherModal(inning)}
                 >
                   <span style={{ fontSize: '11px', opacity: 0.8 }}>Inn {inning}</span>
                   <span style={{ fontSize: '13px', fontWeight: 600 }}>
-                    {pitcherId ? playerName(pitcherId).split(' ')[0] : '+ Assign'}
+                    {pitcherId ? compactName(pitcherId) : '+ Assign'}
                   </span>
                 </button>
               );
@@ -795,6 +817,8 @@ export function LineupView({ onBack, onGameCompleted }) {
         </div>
       </div>
 
+      </details>
+      <details className="planning-section" open={!isLive || optionsOpen} onToggle={e=>{if(isLive)setOptionsOpen(e.currentTarget.open);}}><summary>Game Options</summary>
       {/* Actions */}
       <div className="card no-print">
         <div className="card-body">
@@ -812,7 +836,8 @@ export function LineupView({ onBack, onGameCompleted }) {
         </div>
       </div>
 
-      {isLive && <button className="btn btn-primary btn-block btn-lg no-print" onClick={() => setCompleteModal(true)}>🏁 Complete Game</button>}
+      </details>
+      {isLive && <button className="btn btn-secondary btn-block btn-lg no-print" onClick={() => setCompleteModal(true)}>🏁 Complete Game</button>}
 
       {!isLive && <button className="btn btn-ghost btn-block no-print" onClick={onBack}>
         ← Edit Draft / Game Info

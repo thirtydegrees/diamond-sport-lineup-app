@@ -1946,3 +1946,26 @@ body {
 /* Native mobile date controls must obey the same input box as text fields. */
 input.form-input[type="date"] { display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; min-height: 44px; appearance: none; -webkit-appearance: none; }
 input.form-input[type="date"]::-webkit-date-and-time-value { text-align: left; min-height: 1.2em; }
+
+/* Live coaching controls: emphasis on repeated actions, quiet planning context. */
+.inline-pitches { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; align-items: center; }
+.inline-pitches > div { display: flex; flex-direction: column; gap: 4px; }
+.inline-pitch-total { font-size: 26px; font-weight: 700; }
+.inline-pitch-total small { font-size: 14px; font-weight: 400; }
+.inline-pitches .btn { min-height: 44px; }
+.inline-pitches > p { grid-column: 1 / -1; color: var(--danger); }
+.planning-section { margin: 16px 0; }
+.planning-section > summary { padding: 14px; font-weight: 600; cursor: pointer; background: var(--bg-secondary); border-radius: var(--radius-md); }
+.pitcher-assigned { border-color: var(--primary); }
+.save-status { background: none; border: 0; color: var(--text-secondary); font: inherit; font-size: 12px; padding: 8px; cursor: pointer; }
+@media (max-width: 640px) {
+  .save-status { margin-left: auto; max-width: 130px; text-align: right; }
+  .pitch-review-row { flex-wrap: wrap; }
+  .pitch-review-row > div:first-child { flex-basis: 100% !important; }
+  .pitch-review-row .btn { min-height: 44px; }
+}
+@media print {
+  .planning-section { display: block; }
+  .planning-section > summary { display: none; }
+  .planning-section::details-content { display: block; }
+}

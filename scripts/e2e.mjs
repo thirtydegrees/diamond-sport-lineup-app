@@ -110,7 +110,7 @@ const eligibleCount = await page.locator('.pitcher-status:has-text("Eligible")')
 eligibleCount > 0 ? ok(`policy picker lists ${eligibleCount} eligible pitchers`) : fail('no eligible pitchers listed');
 await page.click('.pitcher-option:not(.disabled)');
 await page.waitForTimeout(300);
-const inn1Pitcher = await page.textContent('.card:has(.card-title:text("Planned Pitchers")) button.btn-primary');
+const inn1Pitcher = await page.textContent('.card:has(.card-title:text("Planned Pitchers")) button.pitcher-assigned');
 inn1Pitcher.includes('Inn 1') ? ok(`pitcher assigned for inning 1 (${inn1Pitcher.trim().replace(/\s+/g, ' ')})`) : fail('pitcher assignment did not stick');
 
 // ============================================
@@ -118,6 +118,8 @@ inn1Pitcher.includes('Inn 1') ? ok(`pitcher assigned for inning 1 (${inn1Pitcher
 // ============================================
 await page.click('button:has-text("Start Game")');
 await page.waitForSelector('.live-panel');
+await page.getByText('Upcoming Lineup',{exact:true}).click();
+await page.getByText('Game Options',{exact:true}).click();
 ok('Start Game enters live out tracking');
 await page.getByRole('button', {name:'Add run for Our Team',exact:true}).click();
 await page.getByRole('button', {name:'Add run for Our Team',exact:true}).click();
@@ -132,7 +134,7 @@ score.us[1] === 1 && score.them[1] === 1 ? ok('live corrections persist per inni
 
 // The plan alone must not create any history: completion list comes later.
 // Working pitch count for the inning-1 pitcher
-await page.click('.live-panel button:has-text("Pitches")');
+await page.click('.live-panel button:has-text("Pitch Details")');
 await page.waitForSelector('.pitch-counter');
 const livePitcherName = (await page.textContent('.pitch-counter-name')).trim();
 for (let i = 0; i < 5; i++) await page.click('.pitch-btn-plus');
@@ -177,7 +179,7 @@ await page.waitForSelector('.live-panel:has-text("Inning 2 of 6")');
 ok('third out rolls to inning 2 with the planned defense');
 
 // Undo the last out (double-tap protection): back to inning 1, 2 outs
-await page.click('button:has-text("Undo Out")');
+await page.click('button:has-text("Undo last out")');
 await page.waitForSelector('.live-panel:has-text("Inning 1 of 6")');
 const dotsAfterUndo = await page.locator('.out-dot.filled').count();
 dotsAfterUndo === 2 ? ok('Undo Out restores inning 1 with 2 outs') : fail(`after undo: ${dotsAfterUndo} dots`);
@@ -187,7 +189,7 @@ await page.waitForSelector('.live-panel:has-text("Inning 2 of 6")');
 // A historical correction selection must reset when the active inning advances.
 await page.getByLabel('Scoring inning').selectOption('1');
 // Confirm End Inning records the remaining 3 outs of inning 2
-await page.click('button:has-text("End Inning (3 outs)")');
+await page.click('button:has-text("Finish Defense (3 outs)")');
 await page.getByRole('button',{name:'Confirm',exact:true}).click();
 await page.waitForSelector('.live-panel:has-text("Inning 3 of 6")');
 ok('End Inning records the rest of the inning after confirmation');
@@ -220,7 +222,7 @@ const layoutSafe = await page.evaluate(() => {
  const top = selector => document.querySelector(selector).getBoundingClientRect().top;
  const buttons = [...document.querySelectorAll('button')];
  const out = buttons.find(b=>b.textContent.includes('Record Defensive Out')).getBoundingClientRect().top;
- const pitch = buttons.find(b=>b.textContent.includes('Pitches')).getBoundingClientRect().top;
+ const pitch = buttons.find(b=>b.textContent.includes('Pitch Details')).getBoundingClientRect().top;
  const complete = buttons.find(b=>b.textContent.includes('Complete Game')).getBoundingClientRect().top;
  const cells = [...document.querySelectorAll('.score-table .score-cell')];
  const n = cells.length / 2;
@@ -292,14 +294,14 @@ const participation = await page.textContent('.stats-table');
 await page.waitForSelector('text=Final pitch counts');
 await page.locator('button:text-is("✏️")').first().click();
 await page.locator('input[aria-label^="Corrected pitches"]').fill('40');
-await page.click('button:has-text("Save")');
+await page.getByRole('button',{name:'Save',exact:true}).click();
 await page.waitForSelector('.toast:has-text("Pitch count corrected")');
 ok('confirmed count corrected from history (8 -> 40)');
 
 // Resolve the unknown count too
 await page.locator('button:text-is("✏️")').last().click();
 await page.locator('input[aria-label^="Corrected pitches"]').fill('12');
-await page.click('button:has-text("Save")');
+await page.getByRole('button',{name:'Save',exact:true}).click();
 await page.waitForTimeout(200);
 const stillNeeded = await page.locator('text=count needed').count();
 stillNeeded === 0 ? ok('unknown count resolved via history correction') : fail('count-needed flag still present');
@@ -619,6 +621,7 @@ stickyPos === 'sticky' ? ok('player column is sticky on mobile') : fail(`player-
 // Start the game on mobile: live panel + one-thumb out recording
 await mpage.click('button:has-text("Start Game")');
 await mpage.waitForSelector('.live-panel');
+await mpage.getByText('Upcoming Lineup',{exact:true}).click();
 await mpage.evaluate(() => window.scrollTo(0,0));
 await mpage.screenshot({path:join(ARTIFACTS,'stabilization-live-mobile.png')});
 await mpage.locator('button:has-text("Record Defensive Out")').tap();

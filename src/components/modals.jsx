@@ -611,6 +611,7 @@ export function CompleteGameModal({ rows, hasOuts, onComplete, onClose, extraPla
             return (
               <div
                 key={r.playerId}
+                className="pitch-review-row"
                 style={{
                   display: 'flex', alignItems: 'center', gap: '8px',
                   padding: '10px 0', borderBottom: '1px solid var(--border-light)'

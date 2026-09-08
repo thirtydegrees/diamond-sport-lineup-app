@@ -19,7 +19,7 @@ import { HistoryView } from './views/HistoryView';
 // Navigation Component
 // ============================================
 function Navigation({ currentView, onViewChange }) {
-  const { settings, activeTeam, user } = React.useContext(AppContext);
+  const { settings, activeTeam, user, syncStatus, saveError } = React.useContext(AppContext);
   const sportEmoji = settings.sport === 'softball' ? '🥎' : '⚾';
   const tabs = [
     { id: 'roster', label: 'Roster', icon: '👥' },
@@ -34,6 +34,9 @@ function Navigation({ currentView, onViewChange }) {
     <nav className="nav">
       <div className="nav-content">
         <div className="nav-brand"><span className="nav-title">{sportEmoji} Diamond Lineup</span><span className="active-team"><span className="active-team-label">{user ? 'Team' : activeTeam ? 'Saved team' : 'Team'}</span> <strong>{activeTeam?.teamName || 'Local team'}</strong></span></div>
+        <button className="save-status" title={saveError || undefined} onClick={() => onViewChange('settings')}>
+          {saveError ? 'Change not saved' : syncStatus === 'error' || syncStatus === 'conflict' ? 'Sync needs attention' : syncStatus === 'synced' && user ? 'Synced' : syncStatus === 'syncing' ? 'Saved on device · syncing' : 'Saved on this device'}
+        </button>
         <div className="nav-tabs">
           {tabs.map(tab => (
             <button
@@ -59,13 +62,22 @@ function TeamWorkspace() {
 }
 
 function AppContent() {
-  const { game, setGame, showToast, remoteVersion, switchingTeam, signedOutVersion } = React.useContext(AppContext);
+  const { game, setGame, showToast, remoteVersion, switchingTeam, signedOutVersion, startupReady, saveError } = React.useContext(AppContext);
   const [view, setView] = React.useState('roster');
   const [showLineup, setShowLineup] = React.useState(false);
   const [showGameChoice, setShowGameChoice] = React.useState(false);
   const [confirmNewGame, setConfirmNewGame] = React.useState(false);
 
   const isLiveGame = game?.status === 'live';
+  const launchHandled = React.useRef(false);
+  React.useLayoutEffect(() => {
+    if (!startupReady || launchHandled.current) return;
+    launchHandled.current = true;
+    if (game?.status === 'live' || game?.status === 'draft') {
+      setView('game');
+      setShowLineup(game.status === 'live' || (game.preparationStage ? game.preparationStage === 'lineup' : Object.keys(game.lineup || {}).length > 0));
+    }
+  }, [startupReady, game]);
 
   React.useLayoutEffect(() => {
     // Keep navigation, but discard dialogs and form state from the old snapshot.
@@ -84,6 +96,7 @@ function AppContent() {
   }, [signedOutVersion]);
 
   const handleViewChange = (newView) => {
+    launchHandled.current = true;
     if (newView === 'game') {
       // A live game goes straight back to the live screen
       if (isLiveGame) {
@@ -144,6 +157,7 @@ function AppContent() {
       />
 
       <UpdateNotice />
+      {saveError && <div className="alert alert-error" role="alert">The last change was not saved: {saveError}</div>}
       <main className="main" key={`${remoteVersion}:${signedOutVersion}`}>
         {view === 'roster' && <RosterView />}
 

@@ -2,6 +2,7 @@ import React from "react";
 
 /** Scores remain inning totals; defensive outs never determine batting runs. */
 export function LiveScore({ game, teamName, onChange }) {
+  const [lastRun, setLastRun] = React.useState(null);
   const context = `${game.id}:${game.live.inning}`;
   const [selection, setSelection] = React.useState({ context, inning: null });
   // Reset in the same render as the inning transition, before controls commit.
@@ -30,12 +31,18 @@ export function LiveScore({ game, teamName, onChange }) {
           <button
             className="btn btn-primary"
             aria-label={`Add run for ${name}`}
-            onClick={() => onChange(side, game.live.inning, 1, true)}
+            onClick={() => {
+              const prior = game.score[side]?.[game.live.inning] || 0;
+              if (onChange(side, game.live.inning, 1, true, prior)) setLastRun({gameId:game.id, side, inning:game.live.inning, total:prior+1, name});
+            }}
           >
             + Run
           </button>
         </div>
       ))}
+      {lastRun && <button className="btn btn-ghost" disabled={lastRun.gameId !== game.id || lastRun.inning !== game.live.inning || game.score[lastRun.side]?.[lastRun.inning] !== lastRun.total} onClick={() => {
+        onChange(lastRun.side,lastRun.inning,-1,true,lastRun.total); setLastRun(null);
+      }}>Undo last run · {lastRun.name}</button>}
       <details>
         <summary>Correct inning scores</summary>
         <div className="score-correction">

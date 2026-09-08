@@ -74,6 +74,7 @@ export async function checkTeamTransitions(browser, baseURL) {
       },
     },
   ];
+  snapshots[0].snapshot.currentGame = {...snapshots[0].snapshot.games[0], id:'saved-preparation', workloadSource:undefined, status:'draft', preparationStage:'setup', outs:[], pitchCounts:{}, pitchingAppearances:[], score:{us:{},them:{}}};
   let releaseFetch;
   let waitForBeta = false;
   let failAlpha = false;
@@ -155,6 +156,7 @@ export async function checkTeamTransitions(browser, baseURL) {
       .locator(".active-team strong")
       .filter({ hasText: "Alpha Club" })
       .waitFor();
+    await page.locator('.nav-tab.active').filter({hasText:'Game'}).waitFor();
     assert.equal(await page.getByText(/^Build [a-f0-9]+$/).count(), 0);
     await page.locator(".nav-tab").filter({ hasText: "Settings" }).click();
     const switchButton = (name) =>
