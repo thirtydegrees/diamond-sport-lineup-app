@@ -69,7 +69,7 @@ function AppContent() {
 
   React.useLayoutEffect(() => {
     // Keep navigation, but discard dialogs and form state from the old snapshot.
-    setShowLineup(wasOpen => game?.status === 'live' || (wasOpen && Object.keys(game?.lineup || {}).length > 0));
+    setShowLineup(wasOpen => game?.status === 'live' || (game?.status === 'draft' && (game.preparationStage ? game.preparationStage === 'lineup' : wasOpen && Object.keys(game.lineup || {}).length > 0)));
     setShowGameChoice(false);
     setConfirmNewGame(false);
   }, [remoteVersion]);
@@ -92,11 +92,10 @@ function AppContent() {
         setShowGameChoice(false);
         return;
       }
-      // A draft with a lineup offers continue/new
-      const hasActiveGame = game && Object.keys(game.lineup || {}).length > 0;
-      if (hasActiveGame) {
-        setShowGameChoice(true);
+      if (game?.status === 'draft') {
         setView('game');
+        setShowLineup(game.preparationStage ? game.preparationStage === 'lineup' : Object.keys(game.lineup || {}).length > 0);
+        setShowGameChoice(false);
         return;
       }
     }
@@ -111,6 +110,7 @@ function AppContent() {
   };
 
   const handleBackToSetup = () => {
+    if (game?.status === 'draft') setGame({...game, preparationStage: 'setup'});
     setShowLineup(false);
   };
 
@@ -154,10 +154,10 @@ function AppContent() {
                 <div className="card-title">Game</div>
               </div>
               <div className="card-body">
-                <p style={{ marginBottom: '16px' }}>You have an active game in progress.</p>
+                <p style={{ marginBottom: '16px' }}>You have a saved draft.</p>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                   <button className="btn btn-primary btn-block" onClick={handleContinueGame}>
-                    Continue Current Game
+                    Resume Draft
                   </button>
                   <button className="btn btn-secondary btn-block" onClick={() => setConfirmNewGame(true)}>
                     Start New Game
@@ -167,6 +167,8 @@ function AppContent() {
             </div>
           </div>
         )}
+
+        {view === 'game' && game?.status === 'draft' && <button className="btn btn-ghost" onClick={() => setConfirmNewGame(true)}>Discard Draft / New Game</button>}
 
         {view === 'game' && !showLineup && !showGameChoice && (
           <GameSetupView onStartGame={handleStartGame} />

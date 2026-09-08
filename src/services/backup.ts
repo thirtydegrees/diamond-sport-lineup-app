@@ -108,6 +108,11 @@ function checkV2Game(game: Game, index: number): Game {
 
   const whole = (v: unknown, min = 0) => typeof v === 'number' && Number.isInteger(v) && v >= min;
   const assignments = (v: unknown) => isRecord(v) && Object.values(v).every(pos=>VALID_ASSIGNMENTS.has(String(pos)));
+  if (game.setupOrder !== undefined && (!Array.isArray(game.setupOrder) || !game.setupOrder.every(id=>typeof id==='string') || new Set(game.setupOrder).size !== game.setupOrder.length)) throw new BackupError(`${label} has invalid setup order`);
+  if (game.preparationStage !== undefined && !['setup','lineup'].includes(game.preparationStage)) throw new BackupError(`${label} has invalid preparation stage`);
+  if (game.lineupInitialized !== undefined && typeof game.lineupInitialized !== 'boolean') throw new BackupError(`${label} has invalid lineup initialization`);
+  if (game.sitOverrides !== undefined && (!Array.isArray(game.sitOverrides) || !game.sitOverrides.every(id=>typeof id==='string'))) throw new BackupError(`${label} has invalid sit overrides`);
+  if (game.avoidOverrides !== undefined && (!Array.isArray(game.avoidOverrides) || !game.avoidOverrides.every(o=>isRecord(o) && typeof o.playerId==='string' && VALID_ASSIGNMENTS.has(o.position)))) throw new BackupError(`${label} has invalid position overrides`);
   if (!whole(game.innings, 1) || ![9,10].includes(game.fielderCount) || !Array.isArray(game.battingOrder) || !game.battingOrder.every(id=>typeof id==='string') || new Set(game.battingOrder).size !== game.battingOrder.length) throw new BackupError(`${label} has invalid game structure`);
   if (!assignments(game.lineup) || !assignments(game.lockedCells)) throw new BackupError(`${label} has invalid plan assignments`);
   if (!isRecord(game.score) || !isRecord(game.score.us) || !isRecord(game.score.them) || ![...Object.values(game.score.us),...Object.values(game.score.them)].every(n=>whole(n))) throw new BackupError(`${label} has invalid scores`);

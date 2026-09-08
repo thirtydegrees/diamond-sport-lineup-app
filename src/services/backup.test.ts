@@ -3,7 +3,7 @@ import { deriveOutings } from '../domain/pitching';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { BackupError, buildBackup, validateBackup, restoreBackup } from './backup';
 import { Storage } from './storage';
-import { completedOuting, makePlayer } from '../test/fixtures';
+import { completedOuting, makePlayer, makeGame } from '../test/fixtures';
 
 // Minimal localStorage shim for node
 const store = new Map<string, string>();
@@ -170,4 +170,12 @@ describe('outside workload classification', () => {
     Storage.saveGames([outside]);
     expect(Storage.getLastGame()).toBeNull();
   });
+});
+
+
+it('round-trips saved preparation including blank choice and generator overrides', () => {
+  seedDevice();
+  const draft = makeGame({setupOrder:['a','b'], preparationStage:'lineup', lineupInitialized:true, battingOrder:['a'], availability:{b:false}, avoidOverrides:[{playerId:'a',position:'C'}], sitOverrides:['a']});
+  Storage.saveCurrentGame(draft);
+  expect(validateBackup(JSON.parse(JSON.stringify(buildBackup()))).data.currentGame).toEqual(draft);
 });

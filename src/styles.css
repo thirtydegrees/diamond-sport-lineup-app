@@ -1942,3 +1942,7 @@ body {
 .score-table .score-cell, .score-table .score-cell.editing { width: 100%; min-width: 0; height: 44px; margin: 0; }
 .live-panel .live-formation { margin-top: var(--space-md); }
 .live-panel .live-score { margin-top: var(--space-lg); margin-bottom: 0; }
+
+/* Native mobile date controls must obey the same input box as text fields. */
+input.form-input[type="date"] { display: block; box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; min-height: 44px; appearance: none; -webkit-appearance: none; }
+input.form-input[type="date"]::-webkit-date-and-time-value { text-align: left; min-height: 1.2em; }

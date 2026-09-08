@@ -16,11 +16,29 @@ export function GameSetupView({ onStartGame }) {
   const { roster, settings, game, setGame, games, defaultBattingOrder } = React.useContext(AppContext);
 
   const [showStartOptions, setShowStartOptions] = React.useState(false);
-  const [battingOrder, setBattingOrder] = React.useState([]);
-  const [availability, setAvailability] = React.useState({});
-  const [opponent, setOpponent] = React.useState('');
-  const [gameDate, setGameDate] = React.useState(todayISO());
-  const [gameInnings, setGameInnings] = React.useState(settings.innings);
+  const battingOrder = game?.setupOrder || game?.battingOrder || [];
+  const availability = game?.availability || {};
+  const opponent = game?.opponent || '';
+  const gameDate = game?.date || todayISO();
+  const gameInnings = game?.innings || settings.innings;
+  const updateSetup = (field, value) => setGame(current => {
+    if (!current || current.status !== 'draft') return current;
+    const prior = field === 'setupOrder' ? (current.setupOrder || current.battingOrder) : current[field];
+    const next = {...current, [field]: typeof value === 'function' ? value(prior) : value};
+    return normalizeGamePlan({...next, battingOrder: (next.setupOrder || next.battingOrder).filter(id => next.availability[id] !== false)});
+  });
+  const setBattingOrder = value => updateSetup('setupOrder', value);
+  const setAvailability = value => updateSetup('availability', value);
+  const setOpponent = value => updateSetup('opponent', value);
+  const setGameDate = value => { if (value) updateSetup('date', value); };
+  const setGameInnings = value => updateSetup('innings', value);
+  const createDraft = order => setGame(current => current || {
+    schemaVersion: 2, id: newId(), status: 'draft', date: todayISO(), opponent: '',
+    innings: settings.innings, fielderCount: settings.fielderCount, sport: settings.sport,
+    rulesSnapshot: structuredClone(settings.pitchRules), rulesVersion: settings.pitchRulePreset + ':2026-09',
+    setupOrder: order, battingOrder: order, availability: {}, pitcherAssignments: {}, lockedCells: {}, lineup: {},
+    score: {us: {}, them: {}}, live: null, outs: [], pitchCounts: {}, playerNames: {}, exitedPlayers: {}
+  });
   const [draggedId, setDraggedId] = React.useState(null);
   const [initialized, setInitialized] = React.useState(false);
   const dragState = React.useRef(null);
@@ -30,15 +48,6 @@ export function GameSetupView({ onStartGame }) {
     if (initialized) return;
 
     if (game?.battingOrder) {
-      // Resume existing game
-      setBattingOrder(game.battingOrder.length > 0 ?
-        [...new Set([...game.battingOrder, ...roster.map(p => p.id)])] :
-        roster.map(p => p.id)
-      );
-      setAvailability(game.availability || {});
-      setOpponent(game.opponent || '');
-      setGameDate(game.date || todayISO());
-      setGameInnings(game.innings || settings.innings);
       setInitialized(true);
     } else {
       // New game - show options if there's a default order or last game
@@ -49,7 +58,7 @@ export function GameSetupView({ onStartGame }) {
         setShowStartOptions(true);
       } else {
         // Just use roster order
-        setBattingOrder(roster.map(p => p.id));
+        createDraft(roster.map(p => p.id));
         setInitialized(true);
       }
     }
@@ -75,7 +84,7 @@ export function GameSetupView({ onStartGame }) {
       order = roster.map(p => p.id);
     }
 
-    setBattingOrder(order);
+    createDraft(order);
     setShowStartOptions(false);
     setInitialized(true);
   };
@@ -171,32 +180,9 @@ export function GameSetupView({ onStartGame }) {
   // Continue to lineup. The plan is normalized so availability and inning
   // edits can't leave hidden assignments, locks, or scores behind (H9).
   const handleContinue = () => {
-    const gameData = normalizeGamePlan({
-      ...game,
-      rulesSnapshot: game?.rulesSnapshot || structuredClone(settings.pitchRules),
-      rulesVersion: game?.rulesVersion || settings.pitchRulePreset + ':2026-09',
-      sport: game?.sport || settings.sport,
-      schemaVersion: 2,
-      id: game?.id || newId(),
-      date: gameDate,
-      opponent,
-      innings: gameInnings,
-      fielderCount,
-      battingOrder: availablePlayers,
-      availability,
-      pitcherAssignments: game?.pitcherAssignments || {},
-      lockedCells: game?.lockedCells || {},
-      lineup: game?.lineup || {},
-      score: game?.score || { us: {}, them: {} },
-      status: game?.status || 'draft',
-      live: game?.live || null,
-      outs: game?.outs || [],
-      pitchCounts: game?.pitchCounts || {},
-      playerNames: game?.playerNames || {},
-      exitedPlayers: game?.exitedPlayers || {}
-    });
-
-    setGame(gameData);
+    if (game?.status !== 'draft') return;
+    const gameData = {...game, preparationStage: 'lineup'};
+    if (!setGame(gameData)) return;
     onStartGame(gameData);
   };
 
@@ -217,13 +203,14 @@ export function GameSetupView({ onStartGame }) {
       {/* Game Info */}
       <div className="card">
         <div className="card-header">
-          <div className="card-title">Game Info</div>
+          <div className="card-title">Draft · Game Info</div>
         </div>
         <div className="card-body">
           <div className="form-group">
-            <label className="form-label">Date</label>
+            <label className="form-label" htmlFor="game-date">Scheduled date</label>
             <input
               type="date"
+              id="game-date"
               className="form-input"
               value={gameDate}
               onChange={(e) => setGameDate(e.target.value)}
@@ -270,7 +257,7 @@ export function GameSetupView({ onStartGame }) {
 
             const isAvailable = availability[playerId] !== false;
             const eligibility = player.canPitch ?
-              assessPitcherRest(playerId, gameDate, games, settings.pitchRules) : null;
+              assessPitcherRest(playerId, gameDate, games, game?.rulesSnapshot || settings.pitchRules) : null;
 
             return (
               <div
@@ -327,6 +314,7 @@ export function GameSetupView({ onStartGame }) {
         </Alert>
       )}
 
+      <p className="form-hint">Draft changes save automatically. The game starts only when you choose Start Game.</p>
       {/* Continue Button */}
       <button
         className="btn btn-primary btn-block"

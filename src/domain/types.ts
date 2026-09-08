@@ -129,6 +129,11 @@ export interface LiveGameState {
 }
 
 export interface Game {
+  setupOrder?: string[];
+  preparationStage?: 'setup' | 'lineup';
+  lineupInitialized?: boolean;
+  avoidOverrides?: {playerId: string; position: Position}[];
+  sitOverrides?: string[];
   workloadSource?: string;
   rulesSnapshot?: PitchRules;
   rulesVersion?: string;

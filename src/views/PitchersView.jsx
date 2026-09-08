@@ -21,7 +21,7 @@ export function PitchersView() {
   const [date, setDate] = React.useState(todayISO());
   const [pitches, setPitches] = React.useState('');
   const [expandedPitcher, setExpandedPitcher] = React.useState(null);
-  const gameDate = todayISO();
+  const [gameDate, setGameDate] = React.useState(todayISO);
 
   const pitchers = roster.filter(p => p.canPitch);
   const outings = React.useMemo(() => deriveOutings(games), [games]);
@@ -43,6 +43,9 @@ export function PitchersView() {
 
   return (
     <div>
+      <label className="form-label">Pitching eligibility for
+        <input aria-label="Eligibility date" type="date" className="form-input" value={gameDate} onChange={e => { if(e.target.value) setGameDate(e.target.value); }} />
+      </label>
       <p className="text-small">Eligibility covers recorded workload for this team. Add outings from other teams, tournaments, and showcases before planning.</p>
       <select aria-label="Add outside pitching workload" className="form-select" value="" onChange={e=>{setOutside(roster.find(p=>p.id===e.target.value));setPitches('');setSource('');}}><option value="">+ Record outside pitching workload</option>{pitchers.map(p=><option value={p.id} key={p.id}>{p.name}</option>)}</select>
       {outside && <Modal title={`Outside workload: ${outside.name}`} onClose={()=>setOutside(null)}><label>Date<input type="date" className="form-input" value={date} onChange={e=>setDate(e.target.value)}/></label><label>Team or event<input className="form-input" value={source} onChange={e=>setSource(e.target.value)}/></label><label>Confirmed pitches (blank means unknown)<input className="form-input" type="number" min="1" value={pitches} onChange={e=>setPitches(e.target.value)}/></label><button className="btn btn-primary" disabled={!source.trim() || !date || (pitches !== '' && (!Number.isInteger(Number(pitches)) || Number(pitches)<1))} onClick={()=>{try{const g=externalPitchingGame(crypto.randomUUID(),date,outside,pitches===''?null:Number(pitches),source);if(setGames([...games,{...g,rulesSnapshot:structuredClone(settings.pitchRules),rulesVersion:settings.pitchRulePreset+':2026-09',sport:settings.sport}]))setOutside(null);}catch(e){showToast(e.message,'error');}}}>Save Workload</button></Modal>}

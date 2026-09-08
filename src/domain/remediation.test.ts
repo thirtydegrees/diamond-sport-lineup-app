@@ -175,3 +175,22 @@ describe('live automated planning boundary', () => {
     expect(firstSolvableInning(game, 7)).toBe(7);
   });
 });
+
+
+describe('scheduled preparation is not actual activity', () => {
+  it('ignores a draft in rest calculations, and starts actual activity empty', () => {
+    const draft = {...completedOuting('draft','2026-09-06','p',80), status:'draft' as const};
+    expect(assessPitcherRest('p','2026-09-07',[draft],baseball[0].rules).eligible).toBe(true);
+    const live = startLiveGame(draft);
+    expect(live.outs).toEqual([]);
+    expect(live.pitchCounts).toEqual({});
+    expect(live.score).toEqual({us:{},them:{}});
+    expect(live.date).toBe(draft.date);
+  });
+  it('uses the selected date while preserving future-outing exclusion for today', () => {
+    const history = [completedOuting('future','2026-09-08','p',25)];
+    expect(assessPitcherRest('p','2026-09-07',history,baseball[0].rules).eligible).toBe(true);
+    expect(assessPitcherRest('p','2026-09-09',history,baseball[0].rules).eligible).toBe(false);
+    expect(assessPitcherRest('p','2026-09-10',history,baseball[0].rules).eligible).toBe(true);
+  });
+});

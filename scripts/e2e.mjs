@@ -494,12 +494,11 @@ await page.waitForSelector('.lineup-grid');
 // requires confirmation (abandoned games leave no history)
 await page.click('.nav-tab:has-text("Roster")');
 await page.click('.nav-tab:has-text("Game")');
-await page.waitForSelector('text=Continue Current Game');
-await page.click('text=Start New Game');
+await page.waitForSelector('.lineup-grid');
+await page.click('text=Discard Draft / New Game');
 await page.waitForSelector('.modal:has-text("Discard the current game")');
 ok('starting a new game asks before discarding the current one');
 await page.click('.modal button:has-text("Cancel")');
-await page.click('text=Continue Current Game');
 await page.waitForSelector('.lineup-grid');
 
 // 12 players x 6 innings, 10 fielders per inning incl SC
@@ -654,6 +653,7 @@ await secondTab.waitForSelector('text=Another tab may be editing');
 await secondTab.close();
 await (await import('./stabilization-e2e.mjs')).checkTeamTransitions(browser, baseURL);
 await (await import('./verification-e2e.mjs')).checkVerificationTransition(browser, baseURL);
+await (await import('./draft-e2e.mjs')).checkDraftLifecycle(browser, baseURL);
 await browser.close();
 server?.kill();
 console.log(process.exitCode ? 'E2E FAILED' : 'E2E PASSED');

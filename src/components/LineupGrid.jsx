@@ -55,6 +55,7 @@ export function LineupGrid({
               className={`score-cell ${isEditing ? 'editing' : ''}`}
               onClick={(e) => {
                 e.stopPropagation();
+                if (!onScoreChange) return;
                 if (isEditing) {
                   setScoreEdit(null);
                 } else {

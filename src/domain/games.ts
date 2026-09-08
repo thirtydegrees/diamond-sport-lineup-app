@@ -101,6 +101,7 @@ export function startLiveGame(game: Game): Game {
     pitchingAppearances: pitcher ? [pitcher] : [],
     pitchingStints: pitcher ? [pitcher] : [],
     status: 'live',
+    outs: [], pitchCounts: {}, score: {us: {}, them: {}},
     live: {
       inning: 1,
       outsRecorded: 0,

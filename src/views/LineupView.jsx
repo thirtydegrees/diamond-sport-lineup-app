@@ -69,12 +69,12 @@ export function LineupView({ onBack, onGameCompleted }) {
   const [warnings, setWarnings] = React.useState(null);
   const [showStartChoice, setShowStartChoice] = React.useState(() => {
     const lineupEmpty = !game?.lineup || Object.keys(game.lineup).length === 0;
-    return lineupEmpty && game?.status === 'draft';
+    return lineupEmpty && game?.status === 'draft' && !game.lineupInitialized;
   });
 
   // Overrides granted for this game (kept for every subsequent re-solve)
-  const [avoidOverrides, setAvoidOverrides] = React.useState([]);
-  const [sitOverrides, setSitOverrides] = React.useState([]);
+  const avoidOverrides = game?.avoidOverrides || [];
+  const sitOverrides = game?.sitOverrides || [];
 
   // Modal states
   const [pitcherModal, setPitcherModal] = React.useState(null); // inning (plan)
@@ -139,6 +139,7 @@ export function LineupView({ onBack, onGameCompleted }) {
 
     const effectiveAvoid = opts.avoidOverrides ?? avoidOverrides;
     const effectiveSit = opts.sitOverrides ?? sitOverrides;
+    baseGame = {...baseGame, lineupInitialized: true, avoidOverrides: effectiveAvoid, sitOverrides: effectiveSit};
 
     const result = Solver.solve({
       players: getActivePlayers(baseGame),
@@ -184,7 +185,7 @@ export function LineupView({ onBack, onGameCompleted }) {
     runSolver(game, fromInning, opts);
   }, [runSolver, game]);
 
-  const [startedBlank, setStartedBlank] = React.useState(false);
+  const startedBlank = !!game?.lineupInitialized;
 
   React.useEffect(() => {
     if (showStartChoice) return;
@@ -201,7 +202,7 @@ export function LineupView({ onBack, onGameCompleted }) {
     if (choice === 'populated') {
       generateLineup(1);
     } else {
-      setStartedBlank(true);
+      setGame({...game, lineupInitialized: true});
     }
   };
 
@@ -544,7 +545,7 @@ export function LineupView({ onBack, onGameCompleted }) {
   };
 
   const handleScoreChange = (side, inning, value, delta = false) => {
-    setGame(current => current?.id === game.id ? updateInningRuns(current, side, inning, value, delta) : current);
+    setGame(current => current?.id === game.id && current.status === 'live' ? updateInningRuns(current, side, inning, value, delta) : current);
   };
 
   const handleAddInning = () => {
@@ -555,7 +556,6 @@ export function LineupView({ onBack, onGameCompleted }) {
   const handleAvoidOverride = (override) => {
     const { fromInning } = avoidOverridePrompt;
     const newOverrides = [...avoidOverrides, override];
-    setAvoidOverrides(newOverrides);
     setAvoidOverridePrompt(null);
     runSolver(game, fromInning, { avoidOverrides: newOverrides });
   };
@@ -563,7 +563,6 @@ export function LineupView({ onBack, onGameCompleted }) {
   const handleSitOverride = (playerIds) => {
     const { fromInning } = sitOverridePrompt;
     const newOverrides = [...new Set([...sitOverrides, ...playerIds])];
-    setSitOverrides(newOverrides);
     setSitOverridePrompt(null);
     runSolver(game, fromInning, { sitOverrides: newOverrides });
   };
@@ -641,6 +640,7 @@ export function LineupView({ onBack, onGameCompleted }) {
             <div>
               <div className="card-title">
                 {pastLastInning ? 'Extra Innings' : `Inning ${live.inning} of ${game.innings}`}
+                <div className="card-subtitle">{formatDateLong(game.date)}</div>
               </div>
               <div className="card-subtitle">
                 {totalOuts} out{totalOuts === 1 ? '' : 's'} recorded · {formatOutsAsInnings(totalOuts)} innings
@@ -724,6 +724,8 @@ export function LineupView({ onBack, onGameCompleted }) {
       {game.status === 'draft' && (
         <div className="card no-print">
           <div className="card-body" style={{ padding: 'var(--space-md)' }}>
+            <p className="form-label">Draft · {formatDateLong(game.date)}{game.opponent ? ` · vs ${game.opponent}` : ''}</p>
+            <p className="form-hint">Preparation saves automatically. Check the scheduled date before starting.</p>
             <button className="btn btn-primary btn-block btn-lg" onClick={handleStartGame}>
               ▶ Start Game
             </button>
@@ -788,7 +790,7 @@ export function LineupView({ onBack, onGameCompleted }) {
             roster={roster}
             currentInning={isLive ? live.inning : 0}
             onCellClick={handleCellClick}
-            onScoreChange={handleScoreChange}
+            onScoreChange={isLive ? handleScoreChange : undefined}
           />
         </div>
       </div>
@@ -800,9 +802,7 @@ export function LineupView({ onBack, onGameCompleted }) {
             <button className="btn btn-primary" disabled={isLive && live.inning >= game.innings} onClick={() => isLive ? setConfirmAction({ title: 'Re-solve Future Innings', message: `Rebuild unlocked assignments from inning ${live.inning + 1}? Current defense and played innings will stay unchanged.`, apply: guarded(game, () => generateLineup(1)) }) : generateLineup(1)}>
               {isLive ? 'Re-solve Future Innings' : 'Fill / Re-solve'}
             </button>
-            {isLive && <button className="btn btn-primary btn-block btn-lg no-print" onClick={() => setCompleteModal(true)}>🏁 Complete Game</button>}
-
-      {!isLive && <button className="btn btn-secondary" onClick={handleClearAndResolve}>
+            {!isLive && <button className="btn btn-secondary" onClick={handleClearAndResolve}>
               Clear & Re-solve
             </button>}
             <button className="btn btn-secondary" onClick={handleAddInning}>
@@ -815,7 +815,7 @@ export function LineupView({ onBack, onGameCompleted }) {
       {isLive && <button className="btn btn-primary btn-block btn-lg no-print" onClick={() => setCompleteModal(true)}>🏁 Complete Game</button>}
 
       {!isLive && <button className="btn btn-ghost btn-block no-print" onClick={onBack}>
-        ← Back to Setup
+        ← Edit Draft / Game Info
       </button>}
 
       {confirmAction && <ConfirmDialog title={confirmAction.title} message={confirmAction.message} confirmLabel="Confirm" onConfirm={() => { confirmAction.apply(); setConfirmAction(null); }} onCancel={() => setConfirmAction(null)} />}
