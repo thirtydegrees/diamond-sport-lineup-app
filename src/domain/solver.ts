@@ -9,8 +9,8 @@
 
    Sport/rule configuration:
    - fieldingPositions: 9 or 10 positions (SC = 4th outfielder)
-   - enforcePitcherCatcherRule / requireContiguousPitching:
-     baseball safety rules, typically off for softball
+   - enforcePitcherCatcherRule: baseball safety rule
+   - requireContiguousPitching: planning preference independent of legal returns
    - maxPitcherInningsPerGame: per-game innings cap for pitchers
    - fairness: maxConsecutiveSits, everyoneInfield
    ============================================ */
@@ -39,7 +39,7 @@ export interface SolveParams {
   fieldingPositions?: Position[];
   /** No P<->C in consecutive innings (baseball safety rule). Default true. */
   enforcePitcherCatcherRule?: boolean;
-  /** Pitching stints must be contiguous. Default true (off for softball). */
+  /** Pitching stints must be contiguous. Default true regardless of legal returns. */
   requireContiguousPitching?: boolean;
   /** Cap on innings one player may pitch per game (null/undefined = no cap). */
   maxPitcherInningsPerGame?: number | null;
@@ -115,9 +115,11 @@ export const Solver = {
       }
     }
     if (pitchingInnings.length === 0) return true;
-    const allInnings = [...pitchingInnings, inning].sort((a, b) => a - b);
-    for (let i = 1; i < allInnings.length; i++) {
-      if (allInnings[i] - allInnings[i - 1] !== 1) return false;
+    const allInnings = [...new Set([...pitchingInnings, inning])].sort((a, b) => a - b);
+    // Empty cells may still be filled. An assigned gap cannot be bridged.
+    for (let i = allInnings[0]; i <= allInnings[allInnings.length - 1]; i++) {
+      if (i === inning || solution[`${player.id}-${i}`] === 'P') continue;
+      if (solution[`${player.id}-${i}`] != null || Object.entries(solution).some(([key, pos]) => pos === 'P' && key.endsWith(`-${i}`))) return false;
     }
     return true;
   },
@@ -146,6 +148,16 @@ export const Solver = {
       maxPitcherInningsPerGame?: number | null;
     } = {}
   ): boolean {
+    if (position !== 'P' && rules.requireContiguousPitching !== false) {
+      let before = false, after = false;
+      for (let i = 1; i <= totalInnings; i++) {
+        if (solution[`${player.id}-${i}`] === 'P') {
+          if (i < inning) before = true;
+          if (i > inning) after = true;
+        }
+      }
+      if (before && after) return false;
+    }
     if (position === 'SIT') return true;
     if (position === 'P' && !player.canPitch) return false;
     if (position === 'C' && !player.canCatch) return false;
@@ -159,6 +171,15 @@ export const Solver = {
       return false;
     }
     if (position === 'P') {
+      if (rules.requireContiguousPitching !== false) {
+        const spans = new Map<string, number[]>();
+        for (const [key, pos] of Object.entries(solution)) {
+          if (pos !== 'P') continue;
+          const sep = key.lastIndexOf('-'), id = key.slice(0, sep);
+          if (id !== player.id) spans.set(id, [...(spans.get(id) || []), Number(key.slice(sep + 1))]);
+        }
+        if ([...spans.values()].some(values => Math.min(...values) < inning && Math.max(...values) > inning)) return false;
+      }
       if (rules.excludedPitcherIds?.includes(player.id)) return false;
       if (rules.maxPitchingStints != null) {
         let stints = 0, previous = false;
@@ -469,6 +490,15 @@ export const Solver = {
       for (const p of players) {
         if (!this.hasInfieldInning(p.id, solution)) {
           warnings.push(`${p.name} never plays the infield`);
+        }
+      }
+    }
+
+    if (requireContiguousPitching) {
+      for (const player of players) {
+        const inningsPitched = Array.from({length: innings}, (_, i) => i + 1).filter(i => solution[`${player.id}-${i}`] === 'P');
+        if (inningsPitched.length && inningsPitched[inningsPitched.length - 1] >= startInning && inningsPitched[inningsPitched.length - 1] - inningsPitched[0] + 1 !== inningsPitched.length) {
+          return {success: false, error: `${player.name} would return to pitch after leaving the mound. Adjust the locked pitching assignments.`};
         }
       }
     }

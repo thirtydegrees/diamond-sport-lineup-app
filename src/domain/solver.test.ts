@@ -269,3 +269,29 @@ describe('Solver.calculateSwapChanges', () => {
     expect(changes[0]).toMatchObject({ playerId: '1', from: 'SS', to: 'SIT', type: 'manual' });
   });
 });
+
+
+describe('continuous pitching plans', () => {
+  const players = [makePlayer('jack'), makePlayer('ben')];
+  const base = {players, innings: 3, fieldingPositions: ['P'] as Position[], maxSitsPerGame: 3};
+  it('rejects Jack, Ben, Jack even if a ruleset permits two stints', () => {
+    expect(Solver.solve({...base, maxPitchingStints: 2, pitcherAssignments: {1:'jack', 2:'ben', 3:'jack'}}).success).toBe(false);
+  });
+  it('accepts a locked continuous three-inning appearance', () => {
+    expect(Solver.solve({...base, pitcherAssignments: {1:'jack', 2:'jack', 3:'jack'}}).success).toBe(true);
+  });
+  it('fills an open gap between locked innings without creating a return', () => {
+    const r = Solver.solve({...base, pitcherAssignments: {1:'jack', 3:'jack'}});
+    expect(r.success).toBe(true);
+    expect(r.solution?.['jack-2']).toBe('P');
+  });
+  it('preserves played innings and excludes a retired pitcher from future solving', () => {
+    const history = {'jack-1':'P', 'ben-1':'SIT'} as LineupMap;
+    const r = Solver.solve({...base, startInning:2, existingPlan:history, excludedPitcherIds:['jack']});
+    expect(r.success).toBe(true);
+    expect(r.solution?.['jack-1']).toBe('P');
+    expect(r.solution?.['ben-2']).toBe('P');
+    expect(r.solution?.['ben-3']).toBe('P');
+    expect(history).toEqual({'jack-1':'P', 'ben-1':'SIT'});
+  });
+});

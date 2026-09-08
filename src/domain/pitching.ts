@@ -212,6 +212,13 @@ export interface AssignmentDecision {
  * Real events must stay recordable, so nothing here hard-refuses a
  * violation - it warns and the UI requires an explicit override (H6).
  */
+export function hasFinishedPitchingAppearance(game: Game, playerId: string): boolean {
+  if (game.status !== 'live' || game.live?.assignments[playerId] === 'P') return false;
+  return (game.pitchingStints || []).includes(playerId)
+    || (game.pitchingAppearances || []).includes(playerId)
+    || (pitchingOutsByPlayer(game)[playerId] || 0) > 0;
+}
+
 export function assessPitcherAssignment(
   player: Player,
   game: Game,
@@ -237,6 +244,10 @@ export function assessPitcherAssignment(
         : `${player.name}: ${rest.reason}`,
       short: rest.needsCount ? 'Count needed' : rest.reason
     });
+  }
+
+  if (hasFinishedPitchingAppearance(game, player.id)) {
+    warnings.push({severity: 'warn', short: 'Pitching appearance finished', message: `${player.name} has already finished a pitching appearance. Return ${player.name} to pitcher?`});
   }
 
   const stints = game.pitchingStints || [];

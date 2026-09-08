@@ -1,3 +1,4 @@
+import { applyLiveSwap } from './games';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SETTINGS } from './constants';
 import {
@@ -356,5 +357,23 @@ describe('capCrossingWarnings (continuation checkpoint)', () => {
   it('no pitcher on the mound -> nothing to warn about', () => {
     const g = startLiveGame(makeGame({ battingOrder: ['a'] }));
     expect(capCrossingWarnings(endInningOuts(g), [], DEFAULT_SETTINGS.pitchRules, 1)).toEqual([]);
+  });
+});
+
+
+describe('finished pitching appearance', () => {
+  it('warns on a zero-out mid-inning return even when league rules permit it', () => {
+    const game = startLiveGame(makeGame({battingOrder:['jack','ben'], lineup:{'jack-1':'P','ben-1':'SS'}}));
+    const switched = applyLiveSwap(game, 'ben', 'P');
+    const permitted = {...rules, maxMoundReturns:1};
+    expect(switched.outs).toHaveLength(0);
+    expect(assessPitcherAssignment(makePlayer('jack'), switched, [], permitted).warnings.some(w=>w.short==='Pitching appearance finished')).toBe(true);
+    expect(assessPitcherAssignment(makePlayer('ben'), switched, [], permitted).warnings.some(w=>w.short==='Pitching appearance finished')).toBe(false);
+    const returned = applyLiveSwap(switched, 'jack', 'P');
+    expect(assessPitcherAssignment(makePlayer('jack'), returned, [], permitted).warnings.some(w=>w.short==='Pitching appearance finished')).toBe(false);
+  });
+  it('does not treat draft pitching plans as actual appearances', () => {
+    const draft = makeGame({lineup:{'jack-1':'P','ben-2':'P'}});
+    expect(assessPitcherAssignment(makePlayer('jack'), draft, [], rules).warnings.some(w=>w.short==='Pitching appearance finished')).toBe(false);
   });
 });

@@ -314,22 +314,7 @@ export function PositionPickerModal({ player, inning, currentPosition, lineup, t
   const checkPitchingContiguity = (pos) => {
     if (pos !== 'P' || !requireContiguousPitching) return true;
 
-    // Find all innings where this player is already pitching
-    const pitchingInnings = [];
-    for (let i = 1; i <= totalInnings; i++) {
-      if (i !== inning && lineup?.[`${player.id}-${i}`] === 'P') {
-        pitchingInnings.push(i);
-      }
-    }
-
-    if (pitchingInnings.length === 0) return true;
-
-    // Check if adding this inning would keep it contiguous
-    const allInnings = [...pitchingInnings, inning].sort((a, b) => a - b);
-    for (let i = 1; i < allInnings.length; i++) {
-      if (allInnings[i] - allInnings[i - 1] !== 1) return false;
-    }
-    return true;
+    return Solver.checkPitchingContiguity(player, inning, lineup || {}, totalInnings);
   };
 
   return (

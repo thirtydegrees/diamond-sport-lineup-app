@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addScheduledInning,
+  firstSolvableInning,
+  hydratePreparedInning,
+  updateInningRuns,
   deleteOutAt,
   editOutAssignments,
   insertOutAfter,
@@ -347,5 +351,34 @@ describe('exit interactions with undo (formation hygiene)', () => {
   it('validateFormation flags exited players still in the formation', () => {
     const issues = validateFormation({ a: 'P', gone: 'C' }, ['a'], 9);
     expect(issues.some(i => i.type === 'inactive')).toBe(true);
+  });
+});
+
+
+describe('explicit end of scheduled innings', () => {
+  function finished() {
+    let game = startLiveGame(makeGame({innings:6, battingOrder:['p'], lineup:Object.fromEntries(Array.from({length:6},(_,i)=>[`p-${i+1}`,'P']))}));
+    for (let i=0;i<18;i++) game=recordOut(game);
+    return game;
+  }
+  it('stops at three outs in six, persists, and refuses a nineteenth out', () => {
+    const game=finished();
+    expect(game.innings).toBe(6);
+    expect(game.live).toMatchObject({inning:6,outsRecorded:3});
+    expect(recordOut(JSON.parse(JSON.stringify(game))).outs).toHaveLength(18);
+    expect(endInningOuts(game)).toEqual(game);
+    expect(undoOut(game).live).toMatchObject({inning:6,outsRecorded:2});
+  });
+  it('extends defense and pitcher plan explicitly and allows resolving until activity', () => {
+    const before=finished(), game=addScheduledInning(before);
+    expect(game.live).toMatchObject({inning:7,outsRecorded:0,preparing:true});
+    expect(game.lineup['p-7']).toBe('P');
+    expect(game.pitcherAssignments[7]).toBe('p');
+    expect(game.outs).toEqual(before.outs);
+    expect(firstSolvableInning(game)).toBe(7);
+    expect(hydratePreparedInning(game).live?.assignments).toEqual({p:'P'});
+    expect(firstSolvableInning(recordOut(game))).toBe(8);
+    expect(firstSolvableInning(setInningPitches(game,'p',7,1))).toBe(8);
+    expect(firstSolvableInning(updateInningRuns(game,'us',7,1))).toBe(8);
   });
 });

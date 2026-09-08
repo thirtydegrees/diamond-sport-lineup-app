@@ -116,7 +116,7 @@ export function startLiveGame(game: Game): Game {
  * after the third out.
  */
 export function recordOut(game: Game): Game {
-  if (game.status !== 'live' || !game.live) return game;
+  if (game.status !== 'live' || !game.live || game.live.outsRecorded >= OUTS_PER_INNING) return game;
   const { inning, outsRecorded, assignments } = game.live;
 
   const out: DefensiveOut = {
@@ -127,10 +127,11 @@ export function recordOut(game: Game): Game {
   };
 
   const outs = [...game.outs, out];
-  let live = { ...game.live, outsRecorded: outsRecorded + 1 };
-  if (live.outsRecorded >= OUTS_PER_INNING) {
+  let live = { ...game.live, preparing: false, outsRecorded: outsRecorded + 1 };
+  if (live.outsRecorded >= OUTS_PER_INNING && inning < game.innings) {
     const nextInning = inning + 1;
     live = {
+      preparing: false,
       inning: nextInning,
       outsRecorded: 0,
       // Next inning starts from its plan; players with no plan entry keep
@@ -247,6 +248,7 @@ export function setInningPitches(game: Game, playerId: string, inning: number, c
   checkCount(live);
   return {
     ...game,
+    live: game.live ? {...game.live, preparing: false} : null,
     pitchCounts: {
       ...game.pitchCounts,
       [playerId]: { ...entry, byInning, live, adjustment }
@@ -260,6 +262,7 @@ export function setLivePitchTotal(game: Game, playerId: string, total: number): 
   const entry = getPitchCountEntry(game, playerId);
   return {
     ...game,
+    live: game.live ? {...game.live, preparing: false} : null,
     pitchCounts: {
       ...game.pitchCounts,
       // Preserve inning tallies; reconcile the unallocated difference.
@@ -604,10 +607,31 @@ export function updateInningRuns(game: Game, side: 'us' | 'them', inning: number
   if (!Number.isSafeInteger(inning) || inning < 1) throw new Error('Invalid scoring inning');
   const runs = delta ? (game.score[side]?.[inning] || 0) + value : value;
   if (!Number.isSafeInteger(value) || !Number.isSafeInteger(runs) || runs < 0) throw new Error('Runs must be a nonnegative whole number');
-  return {...game, score: {...game.score, [side]: {...game.score[side], [inning]: runs}}};
+  return {...game, live: game.live && inning === game.live.inning ? {...game.live, preparing: false} : game.live, score: {...game.score, [side]: {...game.score[side], [inning]: runs}}};
 }
 
-/** Automated planning never changes the current defense or played innings. */
+/** Protect played innings; only an explicitly added, not-yet-used inning is editable. */
 export function firstSolvableInning(game: Game, requested = 1): number {
-  return Math.max(requested, game.status === 'live' && game.live ? game.live.inning + 1 : 1);
+  return Math.max(requested, game.status === 'live' && game.live ? game.live.inning + (game.live.preparing ? 0 : 1) : 1);
+}
+
+
+/** Explicit extension; carry a usable defense and matching pitching plan. */
+export function addScheduledInning(game: Game): Game {
+  const inning = game.innings + 1;
+  const formation = nextFormation(game, inning, game.live?.assignments || planForInning(game, game.innings));
+  const lineup = {...game.lineup};
+  for (const [id, position] of Object.entries(formation)) lineup[`${id}-${inning}`] = position;
+  const pitcher = Object.keys(formation).find(id => formation[id] === 'P');
+  const next = {...game, innings: inning, lineup, pitcherAssignments: {...game.pitcherAssignments, ...(pitcher ? {[inning]:pitcher} : {})}};
+  if (game.status === 'live' && game.live && game.live.inning === game.innings && game.live.outsRecorded === OUTS_PER_INNING) {
+    return {...next, live: {inning, outsRecorded: 0, assignments: formation, preparing: true}};
+  }
+  return next;
+}
+
+/** A newly added inning can be planned before activity; historical defense is immutable. */
+export function hydratePreparedInning(game: Game): Game {
+  if (!game.live?.preparing) return game;
+  return trackMoundChange(game, {...game, live: {...game.live, assignments: planForInning(game, game.live.inning)}});
 }

@@ -226,9 +226,9 @@ const layoutSafe = await page.evaluate(() => {
  const complete = buttons.find(b=>b.textContent.includes('Complete Game')).getBoundingClientRect().top;
  const cells = [...document.querySelectorAll('.score-table .score-cell')];
  const n = cells.length / 2;
- return out < pitch && pitch < top('.live-formation') && top('.live-formation') < top('.live-score') && complete > top('.score-table') && cells.slice(0,n).every((c,i)=>Math.abs(c.getBoundingClientRect().left-cells[i+n].getBoundingClientRect().left)<1);
+ return out < pitch && pitch < top('.live-score') && top('.live-score') < top('.live-formation') && complete > top('.score-table') && cells.slice(0,n).every((c,i)=>Math.abs(c.getBoundingClientRect().left-cells[i+n].getBoundingClientRect().left)<1);
 });
-layoutSafe ? ok('phone layout prioritizes defense and preserves score columns') : fail('phone layout/alignment wrong');
+layoutSafe ? ok('phone layout puts outs, pitching and runs before defense and preserves score columns') : fail('phone layout/alignment wrong');
 
 // ============================================
 // 10. COMPLETE GAME: mandatory pitch-count confirmation
@@ -657,6 +657,7 @@ await secondTab.close();
 await (await import('./stabilization-e2e.mjs')).checkTeamTransitions(browser, baseURL);
 await (await import('./verification-e2e.mjs')).checkVerificationTransition(browser, baseURL);
 await (await import('./draft-e2e.mjs')).checkDraftLifecycle(browser, baseURL);
+await (await import('./regulation-e2e.mjs')).checkRegulation(browser, baseURL);
 await browser.close();
 server?.kill();
 console.log(process.exitCode ? 'E2E FAILED' : 'E2E PASSED');

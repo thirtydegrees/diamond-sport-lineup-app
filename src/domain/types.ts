@@ -120,9 +120,11 @@ export interface PitchCountEntry {
 }
 
 export interface LiveGameState {
+  /** Explicitly added inning may be resolved until its first activity. */
+  preparing?: boolean;
   /** Current defensive inning (1-based). */
   inning: number;
-  /** Outs already recorded in the current inning (0-2). */
+  /** Outs already recorded in the current inning (0-3; three awaits end-of-game choice). */
   outsRecorded: number;
   /** The formation currently on the field: playerId -> position/SIT. */
   assignments: Record<string, Assignment>;
