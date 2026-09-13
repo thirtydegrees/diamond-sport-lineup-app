@@ -12,6 +12,7 @@ import { AppContext } from '../state/AppContext';
 import { Sync } from '../services/sync';
 import { getPreset, getPresetsForSport } from '../domain/presets';
 import { ConfirmDialog } from './ui';
+import { TeamAccess } from './TeamAccess';
 
 const STATUS_DISPLAY = {
   signedOut: { label: 'Not syncing', color: 'var(--text-tertiary)' },
@@ -202,9 +203,10 @@ export function AccountCard() {
             </div>
 
             {syncStatus === 'conflict' && <div role="alert"><p>{Sync.lastError}</p><p>Download your local backup below before loading the cloud copy. A recovery copy also stays on this device.</p><button className="btn btn-secondary" onClick={async()=>{try{await Sync.useCloudCopy();}catch(e){setError(e.message);}}}>Load Cloud Copy</button></div>}
-            <p className="text-small">Sync Now checks for cloud changes and sends pending edits. Offline edits stay on this device; simultaneous edits require review.</p><p className="text-small">Last checked: {Sync.lastPulledAt ? new Date(Sync.lastPulledAt).toLocaleTimeString() : 'Not yet'}</p>
+            <p className="text-small">Changes are checked every 15 seconds while this app is visible. Sync Now checks immediately and sends pending edits. Offline edits stay on this device; simultaneous edits require review.</p><p className="text-small">Last checked: {Sync.lastPulledAt ? new Date(Sync.lastPulledAt).toLocaleTimeString() : 'Not yet'}</p>
             <div className="form-group team-setup-controls"><label className="form-label">Team name</label><input className="form-input" value={rename} placeholder={currentTeam?.name || 'Team name'} onChange={e=>setRename(e.target.value)}/><button className="btn btn-secondary" disabled={!rename.trim() || busy} onClick={async()=>{setBusy(true);try{await Sync.renameTeam(rename);setRename('');}catch(e){setError(e.message);}finally{setBusy(false);}}}>Rename Team</button></div>
             {!settings.onboardingComplete && currentTeam && <div className="card"><div className="card-body team-setup-controls"><strong>Set up this team</strong><p className="text-small">Rename your team above, then choose its sport and age/rules group. You can adjust rules in Settings.</p><select aria-label="Team sport" className="form-select" value={teamType} onChange={e=>{setTeamType(e.target.value);setPresetId(getPresetsForSport(e.target.value)[0].id);}}><option value="baseball">Baseball</option><option value="softball">Softball</option></select><select aria-label="Team rules" className="form-select" value={presetId} onChange={e=>setPresetId(e.target.value)}>{getPresetsForSport(teamType).map(p=><option key={p.id} value={p.id}>{p.label}</option>)}</select><button className="btn btn-primary" onClick={()=>setSettings({...settings,sport:teamType,teamType,pitchRulePreset:presetId,pitchRules:structuredClone(getPreset(presetId).rules),onboardingComplete:true})}>Save Team Setup</button></div></div>}
+            <TeamAccess key={`${user.id}:${currentTeam?.id}`} user={user} team={(teams || []).find(t=>t.id===currentTeam?.id)} onTeamsChanged={async()=>setTeams(await Sync.listTeams())} />
             {/* Teams */}
             <div style={{ marginTop: 'var(--space-md)', paddingTop: 'var(--space-md)', borderTop: '1px solid var(--border-light)' }}>
               <div className="text-muted text-small" style={{ marginBottom: '6px' }}>

@@ -16,12 +16,12 @@ export async function checkTeamTransitions(browser, baseURL) {
     {
       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       name: "Alpha Club",
-      is_personal: true,
+      is_personal: true, owner: user.id,
     },
     {
       id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
       name: "Beta Club",
-      is_personal: false,
+      is_personal: false, owner: user.id,
     },
   ];
   const snapshots = teams.map((t, i) => ({
@@ -89,6 +89,9 @@ export async function checkTeamTransitions(browser, baseURL) {
       await route.fulfill({status: failLogout ? 400 : 204, ...(failLogout ? {json:{message:'Test logout failed'}} : {body:''})});
       return;
     } else if (url.pathname.endsWith('/token')) data = savedSession;
+    else if (url.pathname.endsWith("/my_team_invitations")) data = [];
+    else if (url.pathname.endsWith("/manage_team_access")) data = {members:[],invitations:[]};
+    else if (url.pathname.endsWith("/get_or_create_personal_team")) data = teams[0].id;
     else if (url.pathname.endsWith("/teams")) {
       if (route.request().method() === "PATCH") {
         teams[1].name = route.request().postDataJSON().name;

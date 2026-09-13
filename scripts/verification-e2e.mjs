@@ -4,7 +4,7 @@ export async function checkVerificationTransition(browser, baseURL) {
   const context = await browser.newContext({serviceWorkers:'block'});
   const oldUser = {id:'11111111-1111-4111-8111-111111111111',email:'old@example.test',aud:'authenticated',role:'authenticated'};
   const newUser = {id:'33333333-3333-4333-8333-333333333333',email:'new@example.test',aud:'authenticated',role:'authenticated'};
-  const team = {id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',name:'My Team',is_personal:true};
+  const team = {id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc',name:'My Team',is_personal:true,owner:newUser.id};
   const session = user => {
     const exp=Math.floor(Date.now()/1000)+3600;
     const encode=x=>Buffer.from(JSON.stringify(x)).toString('base64url');
@@ -22,6 +22,8 @@ export async function checkVerificationTransition(browser, baseURL) {
   },{oldSession:session(oldUser),oldUser});
   await context.route('https://*.supabase.co/**',async route=>{
     const request=route.request(), path=new URL(request.url()).pathname;
+    if(path.endsWith('/my_team_invitations'))return route.fulfill({json:[]});
+    if(path.endsWith('/manage_team_access'))return route.fulfill({json:{members:[],invitations:[]}});
     if(path.endsWith('/user'))return route.fulfill({json:newUser});
     if(path.endsWith('/logout'))return route.fulfill({status:204,body:''});
     if(path.endsWith('/teams'))return route.fulfill({json:provisioned?[team]:[]});

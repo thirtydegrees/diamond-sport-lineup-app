@@ -6,6 +6,8 @@ import { makePlayer } from '../test/fixtures';
 
 const store = new Map<string, string>();
 const shim = {
+  get length() {return store.size;},
+  key: (i: number) => [...store.keys()][i] ?? null,
   getItem: (k: string) => store.get(k) ?? null,
   setItem: (k: string, v: string) => {
     store.set(k, v);
@@ -32,6 +34,7 @@ function deferred() {
 }
 class Cloud {
   rows = new Map<string, any>();
+  teams = [team, other];
   failedTeam: string | null = null;
   pause: ReturnType<typeof deferred> | null = null;
   entered: ReturnType<typeof deferred> | null = null;
@@ -48,7 +51,7 @@ class Cloud {
         teamId = v;
         return query;
       },
-      order: async () => ({ data: [team, other], error: null }),
+      order: async () => ({ data: this.teams, error: null }),
       maybeSingle: async () => {
         const row = this.rows.get(teamId) || null;
         const gate = this.reads.get(teamId);
@@ -259,4 +262,28 @@ it('surfaces a server conflict between fetch and save without falling back', asy
   expect(service.status).toBe('conflict');
   expect(Storage.getRoster()[0].name).toBe('Local');
   expect(cloud.writes).toBe(1);
+});
+
+
+it('keeps another owner personal team separate from this account default', async () => {
+  cloud.teams = [{...other,is_personal:true,owner:'someone-else'} as any, {...team,owner:'u1'} as any];
+  await service.initialSync('u1');
+  expect(service.currentTeam?.id).toBe('t1');
+});
+it('revoked access is not an empty snapshot and unsent edits stay recoverable when switching', async () => {
+  await service.initialSync('u1');
+  service.saveLocal({...Storage.exportDataSet(),roster:[makePlayer('saved','Unsent edit')]});
+  cloud.teams=[other]; cloud.rows.delete('t1');
+  await expect(service.syncNow()).rejects.toThrow('access is no longer available');
+  expect(Storage.getRoster()[0].name).toBe('Unsent edit');
+  expect(service.hasPendingChanges()).toBe(true);
+  await service.switchTeam(other);
+  expect(service.currentTeam?.id).toBe('t2');
+  expect(Storage.getRoster()).toEqual([]);
+  expect(service.recoveryCopies().some(c=>c.data.roster[0]?.name==='Unsent edit')).toBe(true);
+});
+it('rejects a forged or no-longer-member switch before replacing local state', async () => {
+  await service.initialSync('u1');
+  await expect(service.switchTeam({...other,id:'unrelated'})).rejects.toThrow('access is no longer available');
+  expect(service.currentTeam?.id).toBe('t1');
 });

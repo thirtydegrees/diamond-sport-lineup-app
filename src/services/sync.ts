@@ -22,6 +22,7 @@ export interface TeamInfo {
   id: string;
   name: string;
   is_personal: boolean;
+  owner?: string;
 }
 interface Meta {
   teamId: string | null;
@@ -92,6 +93,7 @@ export class SyncService {
   private transitioning = false;
   private chain: Promise<unknown> = Promise.resolve();
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private poll: ReturnType<typeof setInterval> | null = null;
   private listeners = new Set<(s: SyncStatus) => void>();
   private applied = new Set<() => void>();
   status: SyncStatus = 'signedOut';
@@ -204,10 +206,33 @@ export class SyncService {
   async listTeams(): Promise<TeamInfo[]> {
     const { data, error } = await this.client
       .from('teams')
-      .select('id,name,is_personal')
+      .select('id,name,is_personal,owner')
       .order('created_at', { ascending: true });
     if (error) throw error;
     return data || [];
+  }
+  /** Poll through the same serialized CAS path; never merge or overwrite conflicts. */
+  private startPolling() {
+    if (this.poll || typeof document === 'undefined') return;
+    this.poll = setInterval(() => {
+      if (this.ready && !this.transitioning && document.visibilityState === 'visible' && this.status !== 'syncing' && this.status !== 'conflict') void this.syncNow().catch(() => undefined);
+    }, 15000);
+  }
+  async membershipRequest(name: string, args?: Record<string, unknown>) {
+    const g = this.generation;
+    const {data, error} = await this.client.rpc(name, args);
+    this.assertGeneration(g);
+    if (error) throw error;
+    return data;
+  }
+  async pendingInvitations() {
+    return await this.membershipRequest('my_team_invitations') || [];
+  }
+  async manageAccess(teamId: string, operation: string, args: Record<string, unknown> = {}) {
+    return this.membershipRequest('manage_team_access', {target_team: teamId, operation, ...args});
+  }
+  async acceptInvitation(id: string) {
+    return this.membershipRequest('accept_team_invitation', {invitation_id: id});
   }
   async createTeam(name: string): Promise<TeamInfo> {
     if (!this.ready || !this.userId || this.transitioning)
@@ -275,7 +300,12 @@ export class SyncService {
         error.message ||
           'Cloud schema unavailable; deployment migration required',
       );
-    if (!data) return null;
+    if (!data) {
+      const teams = await this.listTeams();
+      this.assertGeneration(g);
+      if (!teams.some(t => t.id === teamId)) throw new Error('Team access is no longer available. Your local edits are preserved; choose another team in Settings.');
+      return null;
+    }
     const raw = data.snapshot;
     // Legacy pitchHistory is accepted only by the shared migration boundary.
     const snapshot = validateBackup({
@@ -357,21 +387,18 @@ export class SyncService {
       this.assertGeneration(g);
       const owner = getDataOwner();
       let team = teams.find((t) => t.id === owner?.teamId);
-      if (owner && !team)
-        throw new Error(
-          'Previous team is unavailable. Export your data before choosing another team.',
-        );
-      if (!team) team = teams.find((t) => t.is_personal);
+      const lostTeam = !!owner && !team;
+      if (!team) team = teams.find((t) => t.is_personal && t.owner === userId);
       if (!team) {
         const { data, error } = await this.client.rpc(
           'get_or_create_personal_team',
         );
         this.assertGeneration(g);
         if (error) throw error;
-        team = { id: data as string, name: 'My Team', is_personal: true };
+        team = teams.find(t => t.id === data) || { id: data as string, name: 'My Team', is_personal: true, owner: userId };
       }
       const remote = await this.fetch(team.id, g);
-      if (!owner && remote) {
+      if (lostTeam || (!owner && remote)) {
         this.archive();
         this.adopt(remote, team, userId);
       } else {
@@ -409,6 +436,7 @@ export class SyncService {
       this.ready = true;
       this.transitioning = false;
       await this.reconcile(g);
+      this.startPolling();
       return 'applyRemote';
     } catch (e) {
       if (g === this.generation) {
@@ -428,6 +456,16 @@ export class SyncService {
     this.statusTo('syncing');
     const remote = await this.fetch(team.id, g);
     this.lastPulledAt = new Date().toISOString();
+    const available = await this.listTeams();
+    this.assertGeneration(g);
+    const latestTeam = available.find(t => t.id === team.id);
+    if (!latestTeam) throw new Error('Team access is no longer available. Your local edits are preserved; choose another team in Settings.');
+    if (latestTeam.name !== team.name) {
+      if (!Storage._set('dataOwner', {userId: user, teamId: team.id, teamName: latestTeam.name})) throw new Error('Could not save team identity');
+      team.name = latestTeam.name;
+      this.team = {...latestTeam};
+      this.applied.forEach(f => f());
+    }
     const m = meta();
     if (!m.dirty) {
       if (remote && remote.revision !== m.revision)
@@ -527,9 +565,16 @@ export class SyncService {
       user = this.userId;
     this.transitioning = true;
     try {
-      await this.syncNow();
+      const available = await this.listTeams();
       this.assertGeneration(g);
-      if (this.hasPendingChanges())
+      const destination = available.find(t => t.id === team.id);
+      if (!destination) throw new Error('Team access is no longer available');
+      team = destination;
+      const removed = !available.some(t => t.id === this.team?.id);
+      if (removed) this.archive();
+      else await this.syncNow();
+      this.assertGeneration(g);
+      if (!removed && this.hasPendingChanges())
         throw new Error(
           'Sync or resolve pending changes before switching teams',
         );
@@ -551,14 +596,14 @@ export class SyncService {
     try {
       const teams = await this.listTeams();
       this.assertGeneration(g);
-      let team = teams.find((t) => t.is_personal);
+      let team = teams.find((t) => t.is_personal && t.owner === userId);
       if (!team) {
         const { data, error } = await this.client.rpc(
           'get_or_create_personal_team',
         );
         this.assertGeneration(g);
         if (error) throw error;
-        team = { id: data as string, name: 'My Team', is_personal: true };
+        team = teams.find(t => t.id === data) || { id: data as string, name: 'My Team', is_personal: true, owner: userId };
       }
       const remote = await this.fetch(team.id, g);
       this.archive();
@@ -567,6 +612,7 @@ export class SyncService {
       this.team = team;
       this.ready = true;
       this.statusTo('synced');
+      this.startPolling();
       return 'applyRemote';
     } finally {
       if (g === this.generation) this.transitioning = false;
@@ -641,6 +687,8 @@ export class SyncService {
     await this.flushDirty();
   }
   disable() {
+    if (this.poll) clearInterval(this.poll);
+    this.poll = null;
     ++this.generation;
     this.attemptedUser = null;
     this.ready = false;

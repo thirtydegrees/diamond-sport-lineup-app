@@ -21,10 +21,10 @@ async function asUser(id: string) {
 }
 beforeAll(async () => {
   await db.exec(`create role anon; create role authenticated; create schema auth;
-    create table auth.users(id uuid primary key);
+    create table auth.users(id uuid primary key, email text, email_confirmed_at timestamptz);
     create function auth.uid() returns uuid language sql stable as $$select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid$$;
     grant usage on schema auth,public to anon,authenticated;
-    insert into auth.users values('${alice}'),('${bob}');
+    insert into auth.users(id) values('${alice}'),('${bob}');
     alter default privileges in schema public grant all on tables to anon,authenticated;
     alter default privileges in schema public grant execute on functions to anon,authenticated;`);
   for (const file of readdirSync('supabase/migrations')

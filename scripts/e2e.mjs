@@ -658,6 +658,7 @@ await (await import('./stabilization-e2e.mjs')).checkTeamTransitions(browser, ba
 await (await import('./verification-e2e.mjs')).checkVerificationTransition(browser, baseURL);
 await (await import('./draft-e2e.mjs')).checkDraftLifecycle(browser, baseURL);
 await (await import('./regulation-e2e.mjs')).checkRegulation(browser, baseURL);
+await (await import('./shared-team-e2e.mjs')).checkSharedTeams(browser, baseURL);
 await browser.close();
 server?.kill();
 console.log(process.exitCode ? 'E2E FAILED' : 'E2E PASSED');
